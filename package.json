@@ -1,0 +1,23 @@
+{
+  "name": "bingo-platform",
+  "version": "7.1.0",
+  "private": true,
+  "description": "75-ball Telegram Bingo platform - monorepo root. See README.md.",
+  "scripts": {
+    "generate:cartelas": "node scripts/generateCartelaCsv.js",
+    "import:cartelas": "node scripts/importCartelas.js",
+    "seed:admin": "node scripts/seedAdmin.js",
+    "set:webhook": "node scripts/setWebhook.js",
+    "backend:install": "npm install --prefix backend",
+    "backend:dev": "npm run dev --prefix backend",
+    "backend:start": "npm start --prefix backend",
+    "backend:test": "npm test --prefix backend",
+    "webapp:install": "npm install --prefix webapp",
+    "webapp:dev": "npm run dev --prefix webapp",
+    "webapp:build": "npm run build --prefix webapp"
+  },
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "mongoose": "^7.5.0"
+  }
+}

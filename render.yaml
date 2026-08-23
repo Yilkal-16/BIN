@@ -1,0 +1,80 @@
+# Render Blueprint for the Bingo backend (§15.2).
+# Deploy via: Render Dashboard -> New -> Blueprint -> point at this repo.
+# Every var marked `sync: false` must be filled in manually in the Render
+# dashboard after the first deploy (secrets are never committed to git).
+services:
+  - type: web
+    name: bingo-backend
+    runtime: node
+    plan: starter
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 18.20.0
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT_USERNAME
+        sync: false
+      - key: WEBAPP_URL
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB_NAME
+        value: bingo_db
+      - key: REDIS_URL
+        sync: false
+      - key: REDIS_TOKEN
+        sync: false
+      - key: ADMIN_ID
+        sync: false
+      - key: ADMIN_PIN
+        sync: false
+      - key: ADMIN_PIN_ATTEMPTS_KEY
+        value: admin_pin_attempts
+      - key: HOUSE_WALLET_INITIAL_BALANCE
+        value: "50000"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRY
+        value: 7d
+      - key: RATE_LIMIT_WINDOW
+        value: "3600"
+      - key: RATE_LIMIT_MAX_REQUESTS
+        value: "100"
+      - key: DRAW_INTERVAL
+        value: "3"
+      - key: CARTELA_SELECTION_TIME
+        value: "45"
+      - key: MIN_CARTELAS
+        value: "150"
+      - key: MIN_PRIZE_POOL
+        value: "1200"
+      - key: HOUSE_COMMISSION
+        value: "0.2"
+      - key: MAX_CARTELAS_PER_USER
+        value: "2"
+      - key: STAKE_AMOUNT
+        value: "10"
+      - key: DEPOSIT_PHONE_NUMBER
+        sync: false
+      - key: DEPOSIT_MIN_AMOUNT
+        value: "10"
+      - key: DEPOSIT_MAX_AMOUNT
+        value: "50000"
+      - key: WITHDRAW_MIN_AMOUNT
+        value: "50"
+      - key: WITHDRAW_MAX_AMOUNT
+        value: "15000"
+      - key: WITHDRAW_HOLD_TIMEOUT
+        value: "172800"
+      - key: TELEBIRR_VERIFICATION_TIMEOUT
+        value: "120"
+      - key: FRONTEND_URL
+        sync: false
+      - key: BACKEND_URL
+        sync: false
+      - key: LOG_LEVEL
+        value: info
