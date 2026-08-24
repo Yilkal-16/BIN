@@ -7,8 +7,8 @@ import { useWebSocket } from '../../../hooks/useWebSocket';
 import { api } from '../../../lib/api';
 import { hapticFeedback, notifyHaptic } from '../../../lib/telegram';
 
-const MAX_SELECTABLE = 2;
-const TOTAL_CARTELAS = 600;
+const MAX_SELECTABLE = 3;
+const TOTAL_CARTELAS = 120;
 
 function SelectionContent() {
   const { user, refreshProfile } = useTelegramUser();

@@ -17,7 +17,21 @@
     "webapp:build": "npm run build --prefix webapp"
   },
   "dependencies": {
-    "dotenv": "^16.3.1",
+    "dotenv": "^16.6.1",
+    "mongodb": "^7.5.0",
     "mongoose": "^7.5.0"
-  }
+  },
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Yilkal-16/BIN.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Yilkal-16/BIN/issues"
+  },
+  "homepage": "https://github.com/Yilkal-16/BIN#readme"
 }
