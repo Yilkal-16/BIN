@@ -11,7 +11,7 @@ const { Transaction } = require('../models');
  *
  * Field extraction order (each field extracted independently):
  *   1. Transaction ID   - /transaction number is/i or /የሂሳብ እንቅስቃሴ ቁጥርዎ/i
- *   2. Phone            - /\((2519\*{4}1508)\)/ (exact match, both languages)
+ *   2. Phone            - /\((2519\*{4}7568)\)/ (exact match, both languages)
  *   3. Date & Time      - /(\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}:\d{2})/
  *   4. Amount           - /ETB\s*([\d,]+\.\d+)/i or /([\d,]+\.\d+)\s*ብር/
  *   5. Recipient Name   - /to\s+(.+?)\s*\(2519/i or /ወደ\s+(.+?)\s*\(2519/i
@@ -63,8 +63,8 @@ function parseProofInput(rawText) {
   }
 
   // ---- 2. Extract Phone (with capturing group) ----
-  // Same format in both languages: (2519****1508)
-  const phoneMatch = text.match(/\((2519\*{4}1508)\)/)?.[1];
+  // Same format in both languages: (2519****7568)
+  const phoneMatch = text.match(/\((2519\*{4}7568)\)/)?.[1];
   if (phoneMatch) {
     result.recipientPhoneMasked = phoneMatch;
   }
