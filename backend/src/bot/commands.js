@@ -155,8 +155,8 @@ async function handlePlay(ctx) {
   if (!user) return ctx.reply('Please register first.');
   await ack(ctx);
   await ctx.reply(
-    `🎮 *Game Lobby*\nCurrent Stake: 10 Birr\nYour Balance: ${user.mainWalletBalance} Birr`,
-    { parse_mode: 'Markdown', ...kb.playKeyboard(`${WEBAPP_URL}/game/cartela-selection`) }
+    `🎮 *Game Lobby*\nYour Balance: ${user.mainWalletBalance} Birr`,
+    { parse_mode: 'Markdown', ...kb.playKeyboard(`${WEBAPP_URL}/game/lobby`) }
   );
 }
 
