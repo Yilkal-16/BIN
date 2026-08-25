@@ -80,15 +80,18 @@ function WinnerContent() {
           <p className="text-mute text-sm mb-8">{didIWin ? 'You won this round!' : 'Round complete'}</p>
 
           <div className="space-y-3 mb-8">
-            {game.winners.map((w, i) => (
-              <div key={i} className="flex items-center justify-between bg-surface border border-line rounded-chip px-4 py-3">
-                <div className="text-left">
-                  <p className="font-mono text-sm text-ivory">{winnerLabel(w, user)}</p>
-                  <p className="text-mute text-[11px]">Cartela #{w.cartelaId}</p>
+            {game.winners.map((w, i) => {
+              const name = getWinnerDisplayName(w, user);
+              return (
+                <div key={i} className="flex items-center justify-between bg-surface border border-line rounded-chip px-4 py-3">
+                  <div className="text-left">
+                    <p className="font-mono text-sm text-ivory">{name}</p>
+                    <p className="text-mute text-[11px]">Cartela #{w.cartelaId}</p>
+                  </div>
+                  <p className="font-display font-semibold text-emerald">+{w.prizeAmount} Birr</p>
                 </div>
-                <p className="font-display font-semibold text-emerald">+{w.prizeAmount} Birr</p>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </>
       )}
@@ -98,10 +101,27 @@ function WinnerContent() {
   );
 }
 
-function winnerLabel(winner, user) {
-  if (!winner.ownerId || winner.ownerId === 'system-admin') return 'CARTELA WON!';
-  if (user.id && winner.ownerId.toString() === user.id.toString()) return 'You';
-  return winner.displayName || 'CARTELA WON!';
+function getWinnerDisplayName(winner, user) {
+  // If it's the current user, show "You"
+  if (user.id && winner.ownerId && winner.ownerId.toString() === user.id.toString()) {
+    return 'You';
+  }
+
+  // Try multiple possible name fields from the backend
+  const name =
+    winner.displayName ||
+    winner.username ||
+    winner.name ||
+    winner.owner?.displayName ||
+    winner.owner?.username ||
+    winner.owner?.name;
+
+  if (name) {
+    return name;
+  }
+
+  // Fallback: show "Player #cartelaId"
+  return `Player #${winner.cartelaId}`;
 }
 
 export default function WinnerPage() {
