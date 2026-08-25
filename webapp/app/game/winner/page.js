@@ -47,7 +47,7 @@ function WinnerContent() {
   // ends, instead of dropping the player back at the lobby (which required
   // an extra "Play Now" tap to get back into a game).
   useEffect(() => {
-    if (game && countdown === 0) router.replace('/game/cartela-selection');
+    if (game && countdown === 0) router.replace(`/game/cartela-selection?stake=${game.stake}`);
   }, [game, countdown, router]);
 
   if (error) {
