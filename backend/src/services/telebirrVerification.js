@@ -19,8 +19,8 @@ const { Transaction } = require('../models');
  *
  * Six checks run against extracted data:
  *   1. Amount        — claimed amount matches user-entered amount
- *   2. Recipient name — must equal "Getenet Tesege" (case-insensitive)
- *   3. Recipient phone — must equal "2519****1508"
+ *   2. Recipient name — must equal "Yilkal Tessega" (case-insensitive)
+ *   3. Recipient phone — must equal "2519****7568"
  *   4. Transaction ID  — must be valid format (8-15 uppercase alphanumeric)
  *   5. Transaction ID  — must not already be used
  *   6. Date & time     — must be within 45 minutes
@@ -28,8 +28,8 @@ const { Transaction } = require('../models');
  */
 
 // ---- Hard-coded business constants ----
-const EXPECTED_RECIPIENT_NAME = 'Getenet Tesege';
-const EXPECTED_RECIPIENT_PHONE_MASKED = '2519****1508';
+const EXPECTED_RECIPIENT_NAME = 'Yilkal Tessega';
+const EXPECTED_RECIPIENT_PHONE_MASKED = '2519****7568';
 const MAX_TRANSACTION_AGE_MINUTES = 45;
 const TRANSACTION_ID_FORMAT = /^[A-Z0-9]{8,15}$/i;
 
@@ -89,8 +89,8 @@ function parseProofInput(rawText) {
   }
 
   // ---- 5. Extract Recipient Name ----
-  // English: "to Getenet Tesege (2519****1508)"
-  // Amharic: "ወደ Getenet Tesege(2519****1508)"
+  // English: "to Yilkal Tessega (2519****7568)"
+  // Amharic: "ወደ Yilkal Tessega(2519****7568)"
   const recipientMatch = 
     text.match(/to\s+(.+?)\s*\(2519/i)?.[1] ||
     text.match(/ወደ\s+(.+?)\s*\(2519/i)?.[1];
