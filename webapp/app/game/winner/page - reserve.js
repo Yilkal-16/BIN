@@ -83,8 +83,8 @@ function WinnerContent() {
             {game.winners.map((w, i) => (
               <div key={i} className="flex items-center justify-between bg-surface border border-line rounded-chip px-4 py-3">
                 <div className="text-left">
-                  <p className="font-mono text-sm text-ivory">{winnerLabel(w, user)}</p>
-                  <p className="text-mute text-[11px]">Cartela #{w.cartelaId}</p>
+                  <p className="font-mono text-sm text-ivory">Cartela #{w.cartelaId}</p>
+                  <p className="text-mute text-[11px]">{winnerLabel(w, user)}</p>
                 </div>
                 <p className="font-display font-semibold text-emerald">+{w.prizeAmount} Birr</p>
               </div>
