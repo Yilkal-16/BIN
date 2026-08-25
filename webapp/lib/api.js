@@ -66,7 +66,11 @@ export const api = {
   },
   getAvailableCartelas: (gameId) => request(`/api/cartela/available?gameId=${encodeURIComponent(gameId)}`),
   getMyCartelas: (gameId) => request(`/api/cartela/mine?gameId=${encodeURIComponent(gameId)}`),
-  purchaseCartelas: (gameId, cartelaIds) => request('/api/cartela/purchase', { method: 'POST', body: { gameId, cartelaIds } })
+  purchaseCartelas: (gameId, cartelaIds) => request('/api/cartela/purchase', { method: 'POST', body: { gameId, cartelaIds } }),
+  // NEW: Fetch a single cartela by ID
+  getCartela: (cartelaId) => request(`/api/cartela/${encodeURIComponent(cartelaId)}`),
+  // NEW: Fetch cartela by ID with game context (if needed by backend)
+  getCartelaWithGame: (cartelaId, gameId) => request(`/api/cartela/${encodeURIComponent(cartelaId)}?gameId=${encodeURIComponent(gameId)}`)
 };
 
 export { ApiError, BACKEND_URL };

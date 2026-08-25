@@ -18,7 +18,7 @@ function connectDatabase() {
 
   connecting = mongoose
     .connect(uri, {
-      dbName: process.env.MONGODB_DB_NAME || 'bingo_db',
+      dbName: process.env.MONGODB_DB_NAME || 'BINGCL',
       maxPoolSize: 20,
       serverSelectionTimeoutMS: 10000
     })

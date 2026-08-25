@@ -34,17 +34,6 @@ function SelectionContent() {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const purchasedRef = useRef(false);
-  // Synchronous double-submit guard. `busy` (React state) only disables the
-  // button on the NEXT render, not instantly — a fast double-tap (common in
-  // Telegram's in-app WebView) can fire handleBuy twice before that render
-  // happens, sending a second POST /purchase for the same cartelas right
-  // after the first one already succeeded. The backend then legitimately
-  // rejects the second request ("maximum 2 cartelas") or it fails for some
-  // other transient reason ("failed to fetch") — and that stale rejection
-  // was getting shown to the player as if their purchase had failed, even
-  // though it had already gone through. A ref is checked/set synchronously,
-  // before any re-render, so it closes that race completely.
-  const purchaseInProgressRef = useRef(false);
 
   const loadAvailability = useCallback(async (gid) => {
     const { cartelas } = await api.getAvailableCartelas(gid);
@@ -106,18 +95,13 @@ function SelectionContent() {
         // New round started — reset and show the board again.
         purchasedRef.current = false;
         setSelected([]);
-        loadAvailability(gameId).catch(() => {});
+        loadAvailability(gameId);
       }
     };
     const onCartelaUpdate = (payload) => {
       if (payload.gameId && payload.gameId !== gameId) return;
       if (payload.status === 'bulk-allocated') {
-        // Once a purchase has already succeeded, availability no longer
-        // matters to this player — skip the call entirely rather than risk
-        // a late/irrelevant response (or error) after they've already
-        // bought in. Also never let this throw unhandled: it's a background
-        // refresh, not a user action, and must never surface as an error.
-        if (!purchasedRef.current) loadAvailability(gameId).catch(() => {});
+        loadAvailability(gameId);
         return;
       }
       const ids = payload.cartelaIds || (payload.cartelaId != null ? [payload.cartelaId] : []);
@@ -151,9 +135,6 @@ function SelectionContent() {
 
   const handleBuy = async () => {
     if (selected.length === 0 || !gameId) return;
-    if (purchaseInProgressRef.current || purchasedRef.current) return; // synchronous guard — see purchaseInProgressRef comment above
-    purchaseInProgressRef.current = true;
-
     setBusy(true);
     setError(null);
     try {
@@ -161,6 +142,7 @@ function SelectionContent() {
       if (availableSelected.length === 0) {
         setError('Selected cartelas are no longer available');
         setSelected([]);
+        setBusy(false);
         return;
       }
       setSelected(availableSelected);
@@ -170,19 +152,13 @@ function SelectionContent() {
       await refreshProfile();
       router.push(`/game/live?gameId=${gameId}`);
     } catch (err) {
-      // If a purchase already succeeded (e.g. this was a stray duplicate
-      // request settling late), the error is stale — the player already
-      // has their cartela(s), so don't show it.
-      if (!purchasedRef.current) {
-        setError(err.message);
-        if (err.code === 'CARTELA_UNAVAILABLE') {
-          await loadAvailability(gameId).catch(() => {});
-          setSelected((prev) => prev.filter((id) => !takenIds.has(id)));
-        }
+      setError(err.message);
+      if (err.code === 'CARTELA_UNAVAILABLE') {
+        await loadAvailability(gameId);
+        setSelected((prev) => prev.filter((id) => !takenIds.has(id)));
       }
     } finally {
       setBusy(false);
-      purchaseInProgressRef.current = false;
     }
   };
 
@@ -194,28 +170,14 @@ function SelectionContent() {
   const joiningLive = status !== 'WAITING';
 
   return (
-    <div className="relative px-4 pt-6 isolate overflow-hidden bg-[#0c0a16]">
-      {/* Ambient indigo rim-light — light lives at the extreme edges only,
-          the way trim lighting hugs a dash rail, rather than a fog filling
-          the middle of the screen where it would fight the gold accents. */}
-      <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
-        <div className="absolute -top-32 -left-24 w-64 h-64 rounded-full bg-indigo-500/20 blur-[110px]" />
-        <div className="absolute -top-32 -right-24 w-64 h-64 rounded-full bg-indigo-500/20 blur-[110px]" />
-      </div>
-
-      <header className="relative flex items-center justify-between mb-4 pb-4">
-        {/* Hairline trim under the header — a crisp gradient edge instead of
-            a glow blob, echoing the pinstripe light along a dash rail. */}
-        <div
-          className="absolute left-0 right-0 bottom-0 h-px"
-          style={{ backgroundImage: 'linear-gradient(90deg, transparent, rgba(99,102,241,0.5), transparent)' }}
-        />
+    <div className="px-4 pt-6">
+      <header className="flex items-center justify-between mb-4">
         <button onClick={() => router.push('/game/lobby')} className="text-mute text-sm active:opacity-60">
           ← Back
         </button>
         <div className="text-center">
           <p className="text-mute text-[11px] uppercase tracking-wide">Stake</p>
-          <p className="font-display font-bold text-gold text-lg drop-shadow-[0_0_12px_rgba(99,102,241,0.4)]">10 Birr</p>
+          <p className="font-display font-bold text-gold text-lg">10 Birr</p>
         </div>
         <div className="text-right">
           <p className="text-mute text-[11px] uppercase tracking-wide">Balance</p>
@@ -224,9 +186,9 @@ function SelectionContent() {
       </header>
 
       {countdown != null && status === 'WAITING' && (
-        <div className="mb-4 flex items-center justify-center gap-2 bg-violet-500/10 border border-violet-400/30 rounded-chip py-2.5">
-          <span className="text-violet-200 text-xs font-medium">Selection closes in</span>
-          <span className="font-mono font-bold text-violet-300 text-lg tabular-nums">{countdown}s</span>
+        <div className="mb-4 flex items-center justify-center gap-2 bg-amber-500/10 border border-amber-500/30 rounded-chip py-2.5">
+          <span className="text-amber-200 text-xs font-medium">Selection closes in</span>
+          <span className="font-mono font-bold text-amber-400 text-lg tabular-nums">{countdown}s</span>
         </div>
       )}
 
@@ -243,39 +205,31 @@ function SelectionContent() {
         </div>
       ) : (
         <>
-          <div
-            className="mb-28 rounded-card p-px"
-            style={{ backgroundImage: 'linear-gradient(155deg, rgba(99,102,241,0.45), rgba(99,102,241,0.05) 40%, transparent 70%)' }}
-          >
-            <div className="grid grid-cols-8 gap-1.5 max-h-[58vh] overflow-y-auto pr-1 rounded-card bg-[#0c0a16] p-2">
-              {Array.from({ length: TOTAL_CARTELAS }, (_, i) => i + 1).map((id) => {
-                const isTaken = takenIds.has(id);
-                const isSelected = selected.includes(id);
-                return (
-                  <button
-                    key={id}
-                    disabled={isTaken || purchasedRef.current}
-                    onClick={() => toggleCartela(id)}
-                    className={[
-                      'aspect-square rounded-chip text-xs font-mono font-semibold flex items-center justify-center transition-all',
-                      isSelected
-                        ? 'bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white font-bold scale-105 shadow-lg shadow-violet-500/40 ring-2 ring-white/40'
-                        : isTaken
-                        ? 'bg-surface text-line cursor-not-allowed'
-                        : 'bg-surface2 text-ivory active:bg-line'
-                    ].join(' ')}
-                  >
-                    {id}
-                  </button>
-                );
-              })}
-            </div>
+          <div className="grid grid-cols-8 gap-1.5 mb-28 max-h-[58vh] overflow-y-auto pr-1">
+            {Array.from({ length: TOTAL_CARTELAS }, (_, i) => i + 1).map((id) => {
+              const isTaken = takenIds.has(id);
+              const isSelected = selected.includes(id);
+              return (
+                <button
+                  key={id}
+                  disabled={isTaken || purchasedRef.current}
+                  onClick={() => toggleCartela(id)}
+                  className={[
+                    'aspect-square rounded-chip text-xs font-mono font-semibold flex items-center justify-center transition-all',
+                    isSelected
+                      ? 'bg-gold text-ink font-bold scale-105 shadow-lg shadow-gold/30'
+                      : isTaken
+                      ? 'bg-surface text-line cursor-not-allowed'
+                      : 'bg-surface2 text-ivory active:bg-line'
+                  ].join(' ')}
+                >
+                  {id}
+                </button>
+              );
+            })}
           </div>
 
-          <div
-            className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[560px] bg-[#140f22] px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
-            style={{ borderTop: '1px solid transparent', borderImage: 'linear-gradient(90deg, transparent, rgba(99,102,241,0.55), transparent) 1' }}
-          >
+          <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[560px] bg-surface border-t border-line px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
             <div className="flex items-center justify-between mb-2 text-sm">
               <span className="text-mute font-medium">
                 {selected.length}/{MAX_SELECTABLE} selected
@@ -285,7 +239,7 @@ function SelectionContent() {
             <button
               onClick={handleBuy}
               disabled={selected.length === 0 || busy || !canAfford}
-              className="w-full bg-gradient-to-r from-violet-600 to-fuchsia-600 disabled:bg-line disabled:bg-none disabled:text-mute text-white font-display font-bold text-base py-4 rounded-card active:scale-[0.98] transition-transform shadow-lg shadow-violet-500/30 ring-1 ring-white/20 disabled:ring-0 disabled:shadow-none"
+              className="w-full bg-gold disabled:bg-line disabled:text-mute text-ink font-display font-bold text-base py-4 rounded-card active:scale-[0.98] transition-transform shadow-lg shadow-gold/20 disabled:shadow-none"
             >
               {!canAfford && selected.length > 0 ? 'Insufficient balance' : busy ? 'Confirming…' : 'Buy Cartela(s)'}
             </button>

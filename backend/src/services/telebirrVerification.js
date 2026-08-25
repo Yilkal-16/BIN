@@ -1,248 +1,265 @@
-const axios = require('axios');
+// backend/src/services/telebirrVerification.js
 const logger = require('../utils/logger');
+const { Transaction } = require('../models');
 
 /**
  * ============================================================================
- * Telebirr deposit verification
+ * Telebirr deposit verification — SMS-only (Bilingual)
  * ============================================================================
- * Replaces the earlier @localpay/verification-engine wrapper with a
- * self-contained implementation matching this exact workflow:
+ * Extracts fields individually from the SMS text using language-agnostic
+ * patterns. Works for both English and Amharic SMS formats.
  *
- *   User pastes the full Telebirr confirmation SMS
- *     -> extract the transaction ID and the official receipt URL from it
- *     -> fetch that URL (a normal server-to-server HTTP request — Telebirr's
- *        robots.txt tells *crawlers* not to index these pages for privacy
- *        reasons, which is unrelated to a merchant backend fetching one
- *        specific receipt it was just given a direct link to; that's the
- *        whole point of the "share your payment info" link in the SMS)
- *     -> parse the official page
- *     -> cross-check transaction ID / amount / recipient against what's
- *        expected
- *     -> verified only if every hard check passes with confidence
+ * Field extraction order (each field extracted independently):
+ *   1. Transaction ID   - /transaction number is/i or /የሂሳብ እንቅስቃሴ ቁጥርዎ/i
+ *   2. Phone            - /\((2519\*{4}1508)\)/ (exact match, both languages)
+ *   3. Date & Time      - /(\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}:\d{2})/
+ *   4. Amount           - /ETB\s*([\d,]+\.\d+)/i or /([\d,]+\.\d+)\s*ብር/
+ *   5. Recipient Name   - /to\s+(.+?)\s*\(2519/i or /ወደ\s+(.+?)\s*\(2519/i
+ *   6. Receipt URL      - /https:\/\/transactioninfo\.ethiotelecom\.et\/receipt\/[A-Z0-9]+/i
  *
- * Honesty note on the receipt-page parsing specifically: I could fetch and
- * inspect the SMS format directly (a real sample was provided), so that
- * parser below is exercised against real ground truth and is trustworthy.
- * I could NOT fetch a live receipt page to inspect its actual HTML
- * (blocked by robots.txt for automated tools), so parseReceiptText() below
- * is a structure-agnostic best effort: rather than depend on exact CSS
- * selectors or label text I can't verify, it works off the page's plain
- * text and checks whether the *values* we expect (the transaction ID, the
- * claimed amount, our own phone number's last 4 digits) literally appear
- * on the page. That's more robust to unknown markup than guessing at
- * selectors, but it should still be validated against one real receipt
- * page before you fully trust it in production — see README.
- *
- * Whatever isn't confidently verified falls back to manual admin review
- * (§4.3 Step 6B) rather than guessing in either direction — this function
- * never auto-*rejects* a deposit outright, it only ever auto-*approves*
- * with confidence or defers to a human.
+ * Six checks run against extracted data:
+ *   1. Amount        — claimed amount matches user-entered amount
+ *   2. Recipient name — must equal "Getenet Tesege" (case-insensitive)
+ *   3. Recipient phone — must equal "2519****1508"
+ *   4. Transaction ID  — must be valid format (8-15 uppercase alphanumeric)
+ *   5. Transaction ID  — must not already be used
+ *   6. Date & time     — must be within 45 minutes
  * ============================================================================
  */
 
-const RECEIPT_URL_PATTERN = /https?:\/\/transactioninfo\.ethiotelecom\.et\/receipt\/([A-Za-z0-9]+)/i;
+// ---- Hard-coded business constants ----
+const EXPECTED_RECIPIENT_NAME = 'Getenet Tesege';
+const EXPECTED_RECIPIENT_PHONE_MASKED = '2519****1508';
+const MAX_TRANSACTION_AGE_MINUTES = 45;
+const TRANSACTION_ID_FORMAT = /^[A-Z0-9]{8,15}$/i;
 
 /**
- * Parses whatever the user pasted — ideally the full SMS, but also
- * tolerates a bare receipt URL or a bare transaction ID for users who no
- * longer have the full message.
+ * Extracts fields individually from the SMS text.
+ * Language-agnostic — works for both English and Amharic.
  */
 function parseProofInput(rawText) {
   const text = String(rawText || '').trim();
 
   const result = {
     transactionId: null,
-    receiptUrl: null,
     claimedAmount: null,
-    senderName: null,
     recipientName: null,
     recipientPhoneMasked: null,
-    dateTime: null
+    dateTime: null,
+    receiptUrl: null
   };
 
-  // Anchored to the known SMS template — tolerant of the template's own
-  // inconsistent whitespace (double spaces appear in real samples).
-  const mainMatch = text.match(
-    /transferred\s+ETB\s*([\d,]+\.?\d*)\s+to\s+(.+?)\s*\(([\d*]+)\)\s+on\s+(\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}:\d{2})/is
-  );
-  if (mainMatch) {
-    result.claimedAmount = parseAmount(mainMatch[1]);
-    result.recipientName = mainMatch[2].trim();
-    result.recipientPhoneMasked = mainMatch[3];
-    result.dateTime = mainMatch[4];
+  // ---- 1. Extract Transaction ID ----
+  // English: "transaction number is DGK437T0AK"
+  // Amharic: "የሂሳብ እንቅስቃሴ ቁጥርዎ DGN76DJAH7"
+  // Amharic alternative: "የግብይት ቁጥርዎ DGN76DJAH7"
+  const txIdMatch = 
+    text.match(/transaction number is\s*([A-Z0-9]+)/i)?.[1] ||
+    text.match(/የሂሳብ\s+እንቅስቃሴ\s+ቁጥርዎ\s*([A-Z0-9]+)/)?.[1] ||
+    text.match(/የግብይት\s+ቁጥርዎ\s*([A-Z0-9]+)/)?.[1];
+  
+  if (txIdMatch) {
+    result.transactionId = txIdMatch.toUpperCase();
   }
 
-  const senderMatch = text.match(/Dear\s+(.+?)\s+You have transferred/is);
-  if (senderMatch) result.senderName = senderMatch[1].trim();
+  // ---- 2. Extract Phone (with capturing group) ----
+  // Same format in both languages: (2519****1508)
+  const phoneMatch = text.match(/\((2519\*{4}1508)\)/)?.[1];
+  if (phoneMatch) {
+    result.recipientPhoneMasked = phoneMatch;
+  }
 
-  const txnMatch = text.match(/transaction number is\s+([A-Za-z0-9]+)/i);
-  if (txnMatch) result.transactionId = txnMatch[1].trim();
+  // ---- 3. Extract Date & Time ----
+  // English: "on 20/07/2026 16:52:48"
+  // Amharic: "በ 23/07/2026 15:46:05"
+  const dateMatch = text.match(/(\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}:\d{2})/)?.[1];
+  if (dateMatch) {
+    result.dateTime = dateMatch;
+  }
 
-  const urlMatch = text.match(RECEIPT_URL_PATTERN);
+  // ---- 4. Extract Amount ----
+  // English: "ETB 100.00"
+  // Amharic: "400.00 ብር"
+  const amountMatch = 
+    text.match(/ETB\s*([\d,]+\.\d+)/i)?.[1] ||
+    text.match(/([\d,]+\.\d+)\s*ብር/)?.[1];
+  
+  if (amountMatch) {
+    result.claimedAmount = parseAmount(amountMatch);
+  }
+
+  // ---- 5. Extract Recipient Name ----
+  // English: "to Getenet Tesege (2519****1508)"
+  // Amharic: "ወደ Getenet Tesege(2519****1508)"
+  const recipientMatch = 
+    text.match(/to\s+(.+?)\s*\(2519/i)?.[1] ||
+    text.match(/ወደ\s+(.+?)\s*\(2519/i)?.[1];
+  
+  if (recipientMatch) {
+    // Clean up trailing punctuation/spaces
+    result.recipientName = recipientMatch.trim().replace(/[.,،;:]+$/, '').trim();
+  }
+
+  // ---- 6. Extract Receipt URL ----
+  const urlMatch = text.match(/https:\/\/transactioninfo\.ethiotelecom\.et\/receipt\/[A-Z0-9]+/i)?.[0];
   if (urlMatch) {
-    result.receiptUrl = urlMatch[0].replace(/[.,]$/, ''); // strip trailing sentence punctuation
-    if (!result.transactionId) result.transactionId = urlMatch[1];
+    result.receiptUrl = urlMatch;
+    // If we don't have a transaction ID yet, extract from URL
+    if (!result.transactionId) {
+      const urlTxMatch = urlMatch.match(/\/receipt\/([A-Z0-9]+)/i)?.[1];
+      if (urlTxMatch) {
+        result.transactionId = urlTxMatch.toUpperCase();
+      }
+    }
   }
 
-  // Fallback: nothing SMS-shaped matched — maybe they pasted a bare
-  // transaction ID (Telebirr IDs are ~10 uppercase alphanumeric chars).
-  if (!result.transactionId && !result.receiptUrl && /^[A-Za-z0-9]{6,14}$/.test(text)) {
-    result.transactionId = text.toUpperCase();
-  }
-
-  // If we have an ID but no URL (or vice versa), derive one from the other
-  // — the URL pattern is fixed and documented by Telebirr's own SMS.
-  if (result.transactionId && !result.receiptUrl) {
-    result.receiptUrl = `https://transactioninfo.ethiotelecom.et/receipt/${result.transactionId}`;
+  // ---- Fallback: bare transaction ID ----
+  if (!result.transactionId && /^[A-Z0-9]{8,15}$/i.test(text.trim())) {
+    result.transactionId = text.trim().toUpperCase();
   }
 
   return result;
 }
 
+/**
+ * Parse amount string to number (handles comma thousands separators)
+ */
 function parseAmount(raw) {
   const n = parseFloat(String(raw).replace(/,/g, ''));
   return Number.isFinite(n) ? n : null;
 }
 
-/** Minimal, dependency-free HTML-to-text conversion — no cheerio/jsdom needed for pattern matching. */
-function stripHtmlToText(html) {
-  return String(html)
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&quot;/gi, '"')
-    .replace(/\s+/g, ' ')
-    .trim();
+/**
+ * Normalize phone number for comparison
+ */
+function normalizePhone(masked) {
+  return String(masked || '').replace(/\s+/g, '').toUpperCase();
 }
 
 /**
- * Structure-agnostic extraction from the official receipt page's plain
- * text — see the honesty note at the top of this file.
+ * Normalize name for comparison (case-insensitive, trim spaces)
  */
-function parseReceiptText(text, expectedTransactionId) {
-  const containsTransactionId = expectedTransactionId
-    ? new RegExp(escapeRegExp(expectedTransactionId), 'i').test(text)
-    : false;
-
-  const amounts = [...text.matchAll(/ETB\s*([\d,]+\.\d{2})/gi)].map((m) => parseAmount(m[1]));
-
-  const dateMatch = text.match(/(\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}:\d{2})/);
-
-  return {
-    containsTransactionId,
-    amounts, // every ETB-prefixed figure found — checked via "is the claimed amount among these" rather than guessing which one is "the" amount
-    dateTime: dateMatch ? dateMatch[1] : null,
-    rawTextSample: text.slice(0, 500) // kept small, for admin/debug logging only
-  };
-}
-
-function escapeRegExp(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-async function fetchReceiptHtml(url) {
-  const response = await axios.get(url, {
-    timeout: 10000,
-    maxRedirects: 3,
-    headers: {
-      // A normal browser UA — this is a legitimate merchant-verification
-      // request to a link Telebirr itself generated for exactly this
-      // purpose, not an attempt to evade robots.txt's crawler guidance.
-      'User-Agent': 'Mozilla/5.0 (compatible; BingoDepositVerification/1.0)'
-    },
-    validateStatus: (status) => status < 500
-  });
-  if (response.status !== 200) {
-    throw new Error(`Receipt page returned HTTP ${response.status}`);
-  }
-  return response.data;
+function normalizeName(name) {
+  return String(name || '').trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 /**
- * Main entry point — same call shape callers already use:
- * verifyDeposit({ amount, rawProof }) -> boolean.
- *
- * For richer diagnostics (surfaced to the admin panel / logs), use
- * verifyDepositDetailed() instead, which this wraps.
+ * Parses the SMS "DD/MM/YYYY HH:mm:ss" timestamp into a Date.
+ * Telebirr SMS timestamps are in East Africa Time (UTC+3, no DST).
  */
-async function verifyDeposit({ amount, rawProof }) {
-  const result = await verifyDepositDetailed({ amount, rawProof });
+const EAT_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+function parseSmsDateTime(dateTimeStr) {
+  const m = String(dateTimeStr || '').match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
+  if (!m) return null;
+  const [, dd, mm, yyyy, HH, MM, SS] = m;
+  const utcMs = Date.UTC(Number(yyyy), Number(mm) - 1, Number(dd), Number(HH), Number(MM), Number(SS)) - EAT_OFFSET_MS;
+  const date = new Date(utcMs);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/**
+ * Check if transaction is within 45-minute window (with 5-min clock skew allowance)
+ */
+function isWithinMaxAge(date) {
+  if (!date) return false;
+  const ageMs = Date.now() - date.getTime();
+  return ageMs <= MAX_TRANSACTION_AGE_MINUTES * 60 * 1000 && ageMs >= -5 * 60 * 1000;
+}
+
+/**
+ * Check if transaction ID is already used in another deposit
+ */
+async function isTransactionIdAlreadyUsed(transactionId, excludeTransactionId) {
+  const query = { receiptNumber: transactionId };
+  if (excludeTransactionId) query._id = { $ne: excludeTransactionId };
+  const existing = await Transaction.findOne(query).select('_id');
+  return !!existing;
+}
+
+/**
+ * Main entry point — returns boolean verification result
+ */
+async function verifyDeposit({ amount, rawProof, currentTransactionId }) {
+  const result = await verifyDepositDetailed({ amount, rawProof, currentTransactionId });
   return result.verified;
 }
 
-async function verifyDepositDetailed({ amount, rawProof }) {
+/**
+ * Runs all 6 checks against extracted fields and returns detailed result
+ */
+async function verifyDepositDetailed({ amount, rawProof, currentTransactionId }) {
   const parsed = parseProofInput(rawProof);
 
-  if (!parsed.transactionId || !parsed.receiptUrl) {
-    return { verified: false, reason: 'UNPARSEABLE', parsed };
-  }
+  // Check if all required fields were extracted
+  const hasAllFields = !!(
+    parsed.transactionId &&
+    parsed.claimedAmount != null &&
+    parsed.recipientName &&
+    parsed.recipientPhoneMasked &&
+    parsed.dateTime
+  );
 
-  // Soft check, logged only — see the reasoning in the file header on why
-  // sender-name matching isn't a hard gate (Telegram display names and
-  // Telebirr account names frequently differ legitimately).
-  if (parsed.senderName) {
-    logger.info('Deposit sender name (informational only, not enforced)', { senderName: parsed.senderName });
-  }
-
-  let html;
-  try {
-    html = await fetchReceiptHtml(parsed.receiptUrl);
-  } catch (err) {
-    logger.warn('Failed to fetch Telebirr receipt page — falling back to manual review', {
-      url: parsed.receiptUrl,
-      error: err.message
+  if (!hasAllFields) {
+    logger.warn('Deposit SMS could not be parsed (missing required fields)', {
+      hasTransactionId: !!parsed.transactionId,
+      hasAmount: parsed.claimedAmount != null,
+      hasRecipientName: !!parsed.recipientName,
+      hasPhone: !!parsed.recipientPhoneMasked,
+      hasDateTime: !!parsed.dateTime,
+      rawProofPreview: rawProof.substring(0, 100) + '...'
     });
-    return { verified: false, reason: 'FETCH_FAILED', parsed };
+    return { verified: false, reason: 'UNPARSEABLE', parsed, checks: null };
   }
 
-  const text = stripHtmlToText(html);
-  const receipt = parseReceiptText(text, parsed.transactionId);
+  // Parse the extracted date/time
+  const parsedDateTime = parseSmsDateTime(parsed.dateTime);
 
-  if (!receipt.containsTransactionId) {
-    logger.warn('Receipt page did not contain the expected transaction ID', {
+  // Run all 6 checks
+  const checks = {
+    amountMatches: Math.abs(parsed.claimedAmount - amount) < 0.01,
+    recipientNameMatches: normalizeName(parsed.recipientName) === normalizeName(EXPECTED_RECIPIENT_NAME),
+    recipientPhoneMatches: normalizePhone(parsed.recipientPhoneMasked) === normalizePhone(EXPECTED_RECIPIENT_PHONE_MASKED),
+    transactionIdFormatValid: TRANSACTION_ID_FORMAT.test(parsed.transactionId),
+    transactionIdNotUsed: !(await isTransactionIdAlreadyUsed(parsed.transactionId, currentTransactionId)),
+    withinTimeWindow: isWithinMaxAge(parsedDateTime)
+  };
+
+  // All checks must pass for verification
+  const verified = Object.values(checks).every(Boolean);
+  const reason = verified ? 'OK' : Object.keys(checks).find((k) => !checks[k]).toUpperCase();
+
+  if (!verified) {
+    logger.warn('Deposit failed SMS verification, falling back to manual review', {
       transactionId: parsed.transactionId,
-      url: parsed.receiptUrl
+      amount,
+      reason,
+      checks,
+      parsedRecipientName: parsed.recipientName,
+      parsedRecipientPhoneMasked: parsed.recipientPhoneMasked,
+      parsedDateTime: parsed.dateTime,
+      parsedDateTimeAsUTC: parsedDateTime ? parsedDateTime.toISOString() : null,
+      receiptUrl: parsed.receiptUrl
     });
-    return { verified: false, reason: 'TRANSACTION_ID_NOT_FOUND', parsed, receipt };
+  } else {
+    logger.info('Deposit auto-verified from SMS', { 
+      transactionId: parsed.transactionId, 
+      amount,
+      receiptUrl: parsed.receiptUrl
+    });
   }
 
-  const amountMatches = receipt.amounts.some((a) => a != null && Math.abs(a - amount) < 0.01);
-  if (!amountMatches) {
-    logger.warn('Receipt page did not confirm the claimed deposit amount', {
-      claimedAmount: amount,
-      amountsFoundOnPage: receipt.amounts,
-      transactionId: parsed.transactionId
-    });
-    return { verified: false, reason: 'AMOUNT_MISMATCH', parsed, receipt };
-  }
-
-  const expectedLast4 = String(process.env.DEPOSIT_PHONE_NUMBER || '').slice(-4);
-  const recipientConfirmed = expectedLast4 ? text.includes(expectedLast4) : true;
-  if (!recipientConfirmed) {
-    logger.warn('Receipt page did not confirm our account as the recipient', {
-      transactionId: parsed.transactionId,
-      expectedLast4
-    });
-    return { verified: false, reason: 'RECIPIENT_MISMATCH', parsed, receipt };
-  }
-
-  logger.info('Deposit verified via Telebirr receipt page', {
-    transactionId: parsed.transactionId,
-    amount
-  });
-  return { verified: true, reason: 'OK', parsed, receipt };
+  return { verified, reason, parsed, checks };
 }
 
 module.exports = {
+  EXPECTED_RECIPIENT_NAME,
+  EXPECTED_RECIPIENT_PHONE_MASKED,
+  MAX_TRANSACTION_AGE_MINUTES,
+  TRANSACTION_ID_FORMAT,
   parseProofInput,
-  stripHtmlToText,
-  parseReceiptText,
-  fetchReceiptHtml,
+  parseSmsDateTime,
+  isTransactionIdAlreadyUsed,
   verifyDeposit,
   verifyDepositDetailed
 };

@@ -128,11 +128,6 @@ async function runActiveGameplayPhase(game) {
   if (!started) throw new Error(`Failed to transition ${game.gameId} WAITING -> ACTIVE`);
   Object.assign(game, started.toObject());
   notificationService.emitToGame(game.gameId, 'game_cycle_update', { newState: 'ACTIVE', nextState: 'ACTIVE' });
-  // §2.3: game_state_update must fire on every status change, not just into
-  // WAITING — clients (e.g. the cartela-selection page) key off this event's
-  // `status` field to know the round went live and to redirect players who
-  // didn't buy a cartela into the live/spectator view in real time.
-  await broadcastGameState(game);
 
   const drawSequence = await DrawSequence.findById(game.drawSequenceId);
 

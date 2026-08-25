@@ -6,7 +6,14 @@ const adminRequestSchema = new Schema({
   type: { type: String, enum: ['DEPOSIT', 'WITHDRAW'], required: true },
   amount: { type: Number, required: true },
   proof: String, // For deposits
-  status: { type: String, enum: ['PENDING', 'APPROVED', 'DECLINED'], default: 'PENDING', index: true },
+  // MANUAL_REVIEW / REVERSED / FINALIZED are deposit-only states (SMS
+  // auto-verification workflow): PENDING -> APPROVED (auto or manual) or
+  // MANUAL_REVIEW -> APPROVED -> (REVERSED | FINALIZED). FINALIZED means
+  // an admin confirmed it genuine (or the review window expired
+  // unreversed) — it's a closed, no-longer-actionable state, distinct from
+  // APPROVED which is still within its reversal window. WITHDRAW keeps
+  // using PENDING/APPROVED/DECLINED.
+  status: { type: String, enum: ['PENDING', 'APPROVED', 'DECLINED', 'MANUAL_REVIEW', 'REVERSED', 'FINALIZED'], default: 'PENDING', index: true },
   adminId: { type: Schema.Types.ObjectId, ref: 'User' },
   adminNotes: String,
   declineReason: String,

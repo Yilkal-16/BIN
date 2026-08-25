@@ -43,8 +43,11 @@ function WinnerContent() {
     return () => clearInterval(t);
   }, [game]);
 
+  // Auto-advance to cartela selection for the next round once the countdown
+  // ends, instead of dropping the player back at the lobby (which required
+  // an extra "Play Now" tap to get back into a game).
   useEffect(() => {
-    if (game && countdown === 0) router.replace('/game/lobby');
+    if (game && countdown === 0) router.replace('/game/cartela-selection');
   }, [game, countdown, router]);
 
   if (error) {

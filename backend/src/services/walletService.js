@@ -4,6 +4,15 @@ const { generateReferenceId } = require('../utils/helpers');
 const { ApiError } = require('../middleware/errorHandler');
 const logger = require('../utils/logger');
 
+// walletService intentionally never sends user notifications itself — every
+// caller (routes/admin.js for the web panel, bot/commands.js for Telegram)
+// already has its own notification path right after calling into this
+// module (ctx.reply / notificationService.notifyTelegram), so doing it here
+// too would double-message the user.
+
+// Reversal penalty on an already-approved deposit, applied directly (no env var — see brief).
+const REVERSAL_PENALTY_RATE = 0.4;
+
 /**
  * ============================================================================
  * House Wallet accounting model
@@ -59,19 +68,62 @@ async function getBalance(userId) {
   return { mainWallet: user.mainWalletBalance, coins: user.coins };
 }
 
-/** Recomputes a user's balance directly from the ledger (audit/reconciliation use). */
+/**
+ * Recomputes a user's balance directly from the ledger (audit/reconciliation
+ * use). DEPOSIT rows don't use 'COMPLETED' — they use APPROVED / REVERSED —
+ * so they're handled separately from every other transaction type here.
+ *
+ * A REVERSED deposit has no separate ledger row for the 40% penalty (see
+ * reverseDeposit — no new audit row is created for reversals), so its net
+ * ledger effect is derived from the same row: the original +amount credit
+ * is treated as undone, and the penalty (stored on this row's metadata at
+ * reversal time) is subtracted, netting to -penaltyAmount overall.
+ */
 async function recomputeBalanceFromLedger(userId) {
-  const transactions = await Transaction.find({ userId, status: 'COMPLETED' });
+  const transactions = await Transaction.find({ userId });
   return transactions.reduce((sum, tx) => {
-    if (['DEPOSIT', 'WINNING', 'ADMIN_CREDIT'].includes(tx.type)) return sum + tx.amount;
+    if (tx.type === 'DEPOSIT') {
+      if (tx.status === 'APPROVED') return sum + tx.amount;
+      if (tx.status === 'REVERSED') {
+        const penalty = (tx.metadata && tx.metadata.reversalPenaltyAmount) || tx.amount * REVERSAL_PENALTY_RATE;
+        return sum - penalty;
+      }
+      return sum; // PENDING / MANUAL_REVIEW / FAILED — not yet reflected in the wallet balance
+    }
+    if (tx.status !== 'COMPLETED') return sum;
+    if (['WINNING', 'ADMIN_CREDIT'].includes(tx.type)) return sum + tx.amount;
     if (['WITHDRAW', 'GAME_PURCHASE'].includes(tx.type)) return sum - tx.amount;
     return sum;
   }, 0);
 }
 
 /**
- * Submits a deposit request and attempts automatic verification.
- * Idempotent on receiptNumber (§4.3 Admin Override note / §8.4).
+ * ============================================================================
+ * Deposit workflow (SMS-only verification)
+ * ============================================================================
+ * Status machine for Transaction / AdminRequest on a DEPOSIT:
+ *
+ *   PENDING → APPROVED        (all 6 SMS checks pass, or admin manually approves)
+ *   PENDING → MANUAL_REVIEW   (any SMS check fails)
+ *   MANUAL_REVIEW → APPROVED  (admin approves after review)
+ *   APPROVED → REVERSED       (admin reverses an approved deposit; 40% penalty)
+ *
+ * NOTE: this assumes the Transaction/AdminRequest `status` field will accept
+ * 'MANUAL_REVIEW' and 'REVERSED' as values (in addition to the existing
+ * PENDING/APPROVED/DECLINED/COMPLETED/FAILED used elsewhere in this file for
+ * withdrawals). Add those to the schema's enum if it currently restricts
+ * `status` to a fixed list — this file doesn't touch the schema itself.
+ *
+ * Reversal is deliberately not logged as its own Transaction/audit row —
+ * per the brief this carries minimal risk, so it's just a direct status +
+ * balance update on the existing records rather than a new ledger entry.
+ * ============================================================================
+ */
+
+/**
+ * Submits a deposit request and attempts automatic verification purely from
+ * the pasted Telebirr SMS. Idempotent on receiptNumber (§4.3 Admin Override
+ * note / §8.4).
  */
 async function submitDeposit(userId, amount, rawProof) {
   if (!(amount >= Number(process.env.DEPOSIT_MIN_AMOUNT || 10)) ||
@@ -132,20 +184,34 @@ async function submitDeposit(userId, amount, rawProof) {
   transaction.metadata = { ...transaction.metadata, adminRequestId: adminRequest._id.toString() };
   await transaction.save();
 
-  // Attempt automated verification against the official Telebirr receipt.
-  let verifyResult = { verified: false, reason: 'ERROR' };
+  // Run the 6 SMS checks (amount, recipient name, recipient phone,
+  // transaction ID format, transaction ID not reused, within 45 minutes).
+  let verifyResult = { verified: false, reason: 'ERROR', checks: null };
   try {
-    verifyResult = await verifyDepositDetailed({ amount, rawProof });
+    verifyResult = await verifyDepositDetailed({ amount, rawProof, currentTransactionId: transaction._id });
   } catch (err) {
     logger.warn('Deposit verification threw unexpectedly, falling back to manual admin review', {
       error: err.message
     });
   }
 
+  transaction.metadata = {
+    ...transaction.metadata,
+    verificationReason: verifyResult.reason,
+    verificationChecks: verifyResult.checks
+  };
+
   if (verifyResult.verified) {
-    const result = await approveDepositInternal({ transaction, adminRequest, adminId: null, auto: true });
+    const result = await creditAndApproveDeposit({ transaction, adminRequest, adminId: null, auto: true });
     return { duplicate: false, verified: true, ...result };
   }
+
+  transaction.status = 'MANUAL_REVIEW';
+  await transaction.save();
+
+  adminRequest.status = 'MANUAL_REVIEW';
+  adminRequest.adminNotes = `Auto-verification failed: ${verifyResult.reason}`;
+  await adminRequest.save();
 
   logger.info('Deposit not auto-verified, awaiting manual review', {
     userId: String(userId),
@@ -154,11 +220,12 @@ async function submitDeposit(userId, amount, rawProof) {
   return { duplicate: false, verified: false, reason: verifyResult.reason, transaction, adminRequest };
 }
 
-async function approveDepositInternal({ transaction, adminRequest, adminId, auto = false }) {
+/** Shared crediting logic for both auto-approval and manual "APPROVE" (from MANUAL_REVIEW). */
+async function creditAndApproveDeposit({ transaction, adminRequest, adminId = null, auto = false }) {
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {
-      transaction.status = 'COMPLETED';
+      transaction.status = 'APPROVED';
       await transaction.save({ session });
 
       await User.updateOne(
@@ -169,7 +236,7 @@ async function approveDepositInternal({ transaction, adminRequest, adminId, auto
       adminRequest.status = 'APPROVED';
       adminRequest.completedAt = new Date();
       if (adminId) adminRequest.adminId = adminId;
-      if (auto) adminRequest.adminNotes = 'Auto-approved by verification engine';
+      adminRequest.adminNotes = auto ? 'Auto-approved via SMS verification' : 'Manually approved after review';
       await adminRequest.save({ session });
     });
   } finally {
@@ -179,28 +246,111 @@ async function approveDepositInternal({ transaction, adminRequest, adminId, auto
   return { transaction, adminRequest, newBalance: user.mainWalletBalance };
 }
 
-/** Manual admin approval path for a deposit the auto-verifier couldn't confirm. */
+/**
+ * Admin's "APPROVE" action on a deposit sitting in MANUAL_REVIEW.
+ * Credits the wallet. Notification is sent by the caller (routes/admin.js),
+ * not here, since that route already sends a richer balance-inclusive
+ * message — notifying here too would double-send.
+ */
 async function approveDeposit(adminRequestId, adminId) {
   const adminRequest = await AdminRequest.findById(adminRequestId);
   if (!adminRequest || adminRequest.type !== 'DEPOSIT') {
     throw new ApiError(404, 'NOT_FOUND', 'Deposit request not found');
   }
-  if (adminRequest.status !== 'PENDING') {
-    throw new ApiError(409, 'DUPLICATE_WITHDRAWAL_APPROVAL', `Request already ${adminRequest.status}`);
+  if (adminRequest.status !== 'MANUAL_REVIEW') {
+    throw new ApiError(409, 'INVALID_STATE', `Deposit is not awaiting manual review (current: ${adminRequest.status})`);
   }
   const transaction = await Transaction.findOne({ 'metadata.adminRequestId': adminRequest._id.toString() });
   if (!transaction) throw new ApiError(404, 'NOT_FOUND', 'Linked transaction not found');
 
-  return approveDepositInternal({ transaction, adminRequest, adminId, auto: false });
+  return creditAndApproveDeposit({ transaction, adminRequest, adminId, auto: false });
 }
 
+/**
+ * Admin's "REVERSE (+40%)" action on a deposit currently APPROVED (whether
+ * it was auto-approved or manually approved). Deducts the original amount
+ * plus a 40% penalty from the user's wallet. No separate audit/history
+ * record is created for the reversal — see file header note. Notification
+ * is sent by the caller (routes/admin.js), not here — see approveDeposit.
+ */
+async function reverseDeposit(adminRequestId, adminId) {
+  const adminRequest = await AdminRequest.findById(adminRequestId);
+  if (!adminRequest || adminRequest.type !== 'DEPOSIT') {
+    throw new ApiError(404, 'NOT_FOUND', 'Deposit request not found');
+  }
+  if (adminRequest.status !== 'APPROVED') {
+    throw new ApiError(409, 'INVALID_STATE', `Only an approved deposit can be reversed (current: ${adminRequest.status})`);
+  }
+  const transaction = await Transaction.findOne({ 'metadata.adminRequestId': adminRequest._id.toString() });
+  if (!transaction) throw new ApiError(404, 'NOT_FOUND', 'Linked transaction not found');
+
+  const penaltyAmount = transaction.amount * REVERSAL_PENALTY_RATE;
+  const totalDeduction = transaction.amount + penaltyAmount;
+
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      transaction.status = 'REVERSED';
+      // Recorded on this same row (not a new audit entry) so
+      // recomputeBalanceFromLedger can reconstruct the correct balance.
+      transaction.metadata = { ...transaction.metadata, reversalPenaltyAmount: penaltyAmount, reversalTotalDeduction: totalDeduction };
+      await transaction.save({ session });
+
+      await User.updateOne(
+        { _id: transaction.userId },
+        { $inc: { mainWalletBalance: -totalDeduction } }
+      ).session(session);
+
+      adminRequest.status = 'REVERSED';
+      adminRequest.adminId = adminId;
+      adminRequest.completedAt = new Date();
+      adminRequest.adminNotes = `Reversed after review — 40% penalty (${penaltyAmount}) applied`;
+      await adminRequest.save({ session });
+    });
+  } finally {
+    session.endSession();
+  }
+
+  const user = await User.findById(transaction.userId);
+  return { transaction, adminRequest, newBalance: user.mainWalletBalance, penaltyAmount, totalDeduction };
+}
+
+/**
+ * Admin's explicit "Finalize" action on an APPROVED deposit: confirms it's
+ * genuine and closes the reversal window. No wallet change — the deposit
+ * was already credited at APPROVED time; this only ends its eligibility
+ * for REVERSE and drops it out of the admin's review lists. There's no
+ * automatic time limit — a deposit stays APPROVED (open, reversible)
+ * indefinitely until an admin explicitly finalizes or reverses it.
+ */
+async function finalizeDeposit(adminRequestId, adminId) {
+  const adminRequest = await AdminRequest.findById(adminRequestId);
+  if (!adminRequest || adminRequest.type !== 'DEPOSIT') {
+    throw new ApiError(404, 'NOT_FOUND', 'Deposit request not found');
+  }
+  if (adminRequest.status !== 'APPROVED') {
+    throw new ApiError(409, 'INVALID_STATE', `Only an approved deposit can be finalized (current: ${adminRequest.status})`);
+  }
+  adminRequest.status = 'FINALIZED';
+  adminRequest.adminId = adminId;
+  adminRequest.completedAt = new Date();
+  await adminRequest.save();
+  return { adminRequest };
+}
+
+/**
+ * Optional extra kept for completeness: lets an admin close out a
+ * MANUAL_REVIEW deposit as fraudulent/invalid without crediting anything.
+ * Not part of the requested button set (only APPROVE / REVERSE were asked
+ * for) — wire this up only if you want a third admin action.
+ */
 async function declineDeposit(adminRequestId, adminId, reason) {
   const adminRequest = await AdminRequest.findById(adminRequestId);
   if (!adminRequest || adminRequest.type !== 'DEPOSIT') {
     throw new ApiError(404, 'NOT_FOUND', 'Deposit request not found');
   }
-  if (adminRequest.status !== 'PENDING') {
-    throw new ApiError(409, 'DUPLICATE_WITHDRAWAL_APPROVAL', `Request already ${adminRequest.status}`);
+  if (adminRequest.status !== 'MANUAL_REVIEW') {
+    throw new ApiError(409, 'INVALID_STATE', `Deposit is not awaiting manual review (current: ${adminRequest.status})`);
   }
   const transaction = await Transaction.findOne({ 'metadata.adminRequestId': adminRequest._id.toString() });
 
@@ -396,12 +546,15 @@ async function autoReleaseStaleWithdrawals() {
 
 module.exports = {
   HOUSE_MUTATING_TYPES,
+  REVERSAL_PENALTY_RATE,
   nextReferenceId,
   getHouseWallet,
   getBalance,
   recomputeBalanceFromLedger,
   submitDeposit,
   approveDeposit,
+  reverseDeposit,
+  finalizeDeposit,
   declineDeposit,
   adminCredit,
   requestWithdrawal,

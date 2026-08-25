@@ -210,11 +210,37 @@ async function allocateToSystemAdmin(gameId, count) {
         });
       }
 
-      const claimedIds = [];
-      for (const c of toAllocate) {
-        const claimed = await claimCartela(gameId, c.cartelaId, 'system-admin', session);
-        if (claimed) claimedIds.push(c.cartelaId);
-      }
+      // Single bulk claim instead of N sequential findOneAndUpdate calls.
+      // The old version awaited one Mongo round-trip PER cartela inside
+      // this transaction — when a real purchase lands late in the WAITING
+      // window (a normal occurrence, not an edge case), scheduler.js
+      // correctly has to fill the entire remaining deficit in a single
+      // tick, which meant this loop alone could take multiple seconds
+      // (minCartelas x one round-trip each) and directly delayed the
+      // WAITING -> ACTIVE transition, since runWaitingPhase can't return
+      // (and engine.js can't emit the ACTIVE game_cycle_update) until this
+      // finishes. Safe as one atomic updateMany because this only ever
+      // runs while engine.js holds the per-game auto-allocate lock, so no
+      // concurrent auto-allocation call can race against these same
+      // documents — the only remaining race is a genuine user purchase,
+      // which the ownerId: null filter still protects against, and the
+      // requery below re-derives exactly which ids we actually got.
+      const purchasedAt = new Date();
+      const candidateIds = toAllocate.map((c) => c.cartelaId);
+      const updateResult = await GameCartela.updateMany(
+        { gameId, cartelaId: { $in: candidateIds }, ownerId: null },
+        { $set: { ownerId: 'system-admin', purchasedAt } },
+        { session }
+      );
+      if (!updateResult.modifiedCount) return;
+
+      const claimedDocs = await GameCartela.find(
+        { gameId, cartelaId: { $in: candidateIds }, ownerId: 'system-admin', purchasedAt },
+        { cartelaId: 1 }
+      )
+        .session(session)
+        .lean();
+      const claimedIds = claimedDocs.map((c) => c.cartelaId);
       if (claimedIds.length === 0) return;
 
       const cost = claimedIds.length * STAKE;

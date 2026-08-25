@@ -10,9 +10,14 @@ const router = express.Router();
 router.use(requireAuth, requireAdmin);
 
 router.get('/dashboard', asyncHandler(async (req, res) => {
-  const [house, pendingDeposits, pendingWithdrawals, totalUsers, activeGame] = await Promise.all([
+  const [house, pendingDeposits, reversibleDeposits, pendingWithdrawals, totalUsers, activeGame] = await Promise.all([
     HouseWallet.findOne({ walletId: 'house' }),
-    AdminRequest.countDocuments({ type: 'DEPOSIT', status: 'PENDING' }),
+    // Deposits never sit at PENDING (see walletService.submitDeposit) — a
+    // deposit needing admin action is either MANUAL_REVIEW (needs APPROVE)
+    // or APPROVED (open/reversible until an admin explicitly REVERSEs or
+    // FINALIZEs it — no automatic time limit).
+    AdminRequest.countDocuments({ type: 'DEPOSIT', status: 'MANUAL_REVIEW' }),
+    AdminRequest.countDocuments({ type: 'DEPOSIT', status: 'APPROVED' }),
     AdminRequest.countDocuments({ type: 'WITHDRAW', status: 'PENDING' }),
     User.countDocuments({ isAdmin: false }),
     Game.findOne({ status: { $in: ['WAITING', 'ACTIVE', 'SETTLING'] } }).sort({ startTime: -1 })
@@ -20,6 +25,7 @@ router.get('/dashboard', asyncHandler(async (req, res) => {
   return ok(res, {
     houseWalletBalance: house ? house.balance : 0,
     pendingDeposits,
+    reversibleDeposits,
     pendingWithdrawals,
     totalUsers,
     enginePaused: engine.isPaused(),
@@ -32,13 +38,40 @@ router.get('/dashboard', asyncHandler(async (req, res) => {
 router.get('/requests', asyncHandler(async (req, res) => {
   const { type, status } = req.query;
   const { limit, offset } = paginationParams(req.query);
+
   const filter = {};
+
   if (type) filter.type = type;
-  if (status) filter.status = status;
-  else filter.status = 'PENDING';
+
+  if (status) {
+    filter.status = status;
+  } else if (type === 'DEPOSIT') {
+    // Deposits never sit at PENDING (see walletService.submitDeposit) —
+    // MANUAL_REVIEW needs an APPROVE action, APPROVED is open/reversible
+    // until an admin explicitly REVERSEs or FINALIZEs it.
+    filter.status = { $in: ['MANUAL_REVIEW', 'APPROVED'] };
+  } else if (type === 'WITHDRAW') {
+    filter.status = 'PENDING';
+  } else {
+    // No type filter given — combine both action-needed sets rather than
+    // a single default status, since DEPOSIT and WITHDRAW mean different
+    // things by "needs action" now.
+    filter.$or = [
+      { type: 'WITHDRAW', status: 'PENDING' },
+      { type: 'DEPOSIT', status: { $in: ['MANUAL_REVIEW', 'APPROVED'] } }
+    ];
+  }
+
+  // APPROVED deposits have no automatic expiry — they can sit open
+  // indefinitely until an admin acts — so an unbounded backlog of older
+  // approvals would otherwise bury freshly-approved ones under a fixed
+  // page size forever. Newest-first surfaces what's actually new; oldest
+  // first (FIFO) everywhere else, since those are items actively waiting
+  // on a decision and should be handled in order received.
+  const sortOrder = status === 'APPROVED' ? -1 : 1;
 
   const [requests, total] = await Promise.all([
-    AdminRequest.find(filter).populate('userId', 'displayName phone telegramId').sort({ createdAt: 1 }).skip(offset).limit(limit),
+    AdminRequest.find(filter).populate('userId', 'displayName phone telegramId').sort({ createdAt: sortOrder }).skip(offset).limit(limit),
     AdminRequest.countDocuments(filter)
   ]);
   return ok(res, { requests, pagination: { limit, offset, total, hasMore: offset + requests.length < total } });
@@ -54,6 +87,32 @@ router.post('/deposit/approve', asyncHandler(async (req, res) => {
     `✅ *Deposit Successful!*\nYour wallet has been credited with ${transaction.amount} Birr.\n💰 *New Balance:* ${newBalance} Birr`
   );
   return ok(res, { adminRequest, newBalance });
+}));
+
+// Admin's REVERSE (+40%) action on a deposit that's currently APPROVED
+// (auto-verified or previously manually approved), used after a manual
+// double-check turns up a fraudulent/incorrect deposit.
+router.post('/deposit/reverse', asyncHandler(async (req, res) => {
+  const { requestId } = req.body || {};
+  if (!requestId) return fail(res, 400, 'INVALID_AMOUNT', 'requestId is required');
+  const { transaction, adminRequest, newBalance, penaltyAmount, totalDeduction } = await walletService.reverseDeposit(requestId, req.userId);
+  const user = await User.findById(adminRequest.userId);
+  await notificationService.notifyTelegram(
+    user.telegramId,
+    `❌ *Deposit Reversed*\nA 40% penalty (${penaltyAmount} Birr) has been applied.\n💰 *New Balance:* ${newBalance} Birr`
+  );
+  return ok(res, { adminRequest, newBalance, penaltyAmount, totalDeduction });
+}));
+
+// Admin's explicit "Finalize" action on a deposit that's currently
+// APPROVED: confirms it's genuine and closes its reversal window. No
+// automatic time limit — a deposit stays open/reversible until an admin
+// explicitly finalizes or reverses it.
+router.post('/deposit/finalize', asyncHandler(async (req, res) => {
+  const { requestId } = req.body || {};
+  if (!requestId) return fail(res, 400, 'INVALID_AMOUNT', 'requestId is required');
+  const { adminRequest } = await walletService.finalizeDeposit(requestId, req.userId);
+  return ok(res, { adminRequest });
 }));
 
 router.post('/deposit/decline', asyncHandler(async (req, res) => {

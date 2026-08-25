@@ -44,11 +44,5 @@ export function closeWebApp() {
 }
 
 export function isInsideTelegram() {
-  const webApp = getWebApp();
-  // A stub `Telegram.WebApp` object can exist even when this page is opened
-  // directly in a plain browser tab (the SDK script still loads and
-  // attaches window.Telegram.WebApp) — the reliable signal that this is a
-  // real Telegram launch is a non-empty initData string, since Telegram
-  // only populates that when it actually opens the Mini App itself.
-  return !!(webApp && webApp.initData && webApp.initData.length > 0);
+  return !!getWebApp();
 }

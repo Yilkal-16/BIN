@@ -40,7 +40,15 @@ const transactionSchema = new Schema({
   gameId: { type: String }, // Reference to game if applicable
   cartelaIds: { type: [Number], default: undefined }, // Cartelas involved (for game purchases)
   metadata: { type: Schema.Types.Mixed },
-  status: { type: String, enum: ['PENDING', 'COMPLETED', 'FAILED'], default: 'PENDING' },
+  // APPROVED / MANUAL_REVIEW / REVERSED are DEPOSIT-only states (SMS
+  // auto-verification workflow, see walletService.submitDeposit): other
+  // transaction types (WITHDRAW, GAME_PURCHASE, WINNING, etc.) still only
+  // ever use PENDING/COMPLETED/FAILED.
+  status: {
+    type: String,
+    enum: ['PENDING', 'COMPLETED', 'FAILED', 'APPROVED', 'MANUAL_REVIEW', 'REVERSED'],
+    default: 'PENDING'
+  },
   timestamp: { type: Date, default: Date.now }
 });
 

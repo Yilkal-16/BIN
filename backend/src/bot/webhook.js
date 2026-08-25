@@ -25,6 +25,8 @@ function createBot() {
 
   bot.action(/^dep_approve_(.+)$/, (ctx) => commands.handleDepositDecision(ctx, 'approve', ctx.match[1]));
   bot.action(/^dep_decline_(.+)$/, (ctx) => commands.handleDepositDecision(ctx, 'decline', ctx.match[1]));
+  bot.action(/^dep_reverse_(.+)$/, (ctx) => commands.handleDepositDecision(ctx, 'reverse', ctx.match[1]));
+  bot.action(/^dep_finalize_(.+)$/, (ctx) => commands.handleDepositDecision(ctx, 'finalize', ctx.match[1]));
   bot.action(/^wd_approve_(.+)$/, (ctx) => commands.handleWithdrawDecision(ctx, 'approve', ctx.match[1]));
   bot.action(/^wd_decline_(.+)$/, (ctx) => commands.handleWithdrawDecision(ctx, 'decline', ctx.match[1]));
 

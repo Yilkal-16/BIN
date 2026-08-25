@@ -18,6 +18,26 @@ function mainMenu(user) {
   return Markup.inlineKeyboard(rows);
 }
 
+/**
+ * Persistent quick-access menu — a reply keyboard (not inline), so it stays
+ * docked at the bottom of the chat across every message instead of being
+ * attached to one specific bubble. Lets players jump to Play/Balance/Deposit
+ * etc. without scrolling back to find the original inline menu.
+ */
+function persistentMenu(user) {
+  if (!user) {
+    return Markup.keyboard([['📝 Register']]).resize();
+  }
+  if (user.isAdmin) {
+    return Markup.keyboard([['🛠️ Admin Panel', '💰 Balance']]).resize();
+  }
+  return Markup.keyboard([
+    ['🎮 Play', '💰 Balance'],
+    ['💵 Deposit', '💸 Withdraw'],
+    ['☎️ Support', 'ℹ️ Info']
+  ]).resize();
+}
+
 function shareContactKeyboard() {
   return Markup.keyboard([Markup.button.contactRequest('Share Contact 📱')])
     .oneTime()
@@ -57,12 +77,43 @@ function approveDeclineKeyboard(type, id) {
   ]);
 }
 
+/**
+ * Deposit action keyboard — deposits no longer follow the simple
+ * PENDING -> approve/decline shape approveDeclineKeyboard was built for
+ * (see walletService.submitDeposit): a deposit sitting in MANUAL_REVIEW
+ * needs an APPROVE button, one that's already APPROVED (auto or manual)
+ * needs a REVERSE (+40%) button for the post-hoc double-check, and
+ * REVERSED is a terminal state with no action left.
+ */
+function depositActionKeyboard(status, id) {
+  if (status === 'MANUAL_REVIEW') {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback('✅ Approve', `dep_approve_${id}`),
+        Markup.button.callback('❌ Decline', `dep_decline_${id}`)
+      ]
+    ]);
+  }
+  if (status === 'APPROVED') {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback('⚠️ Reverse (+40%)', `dep_reverse_${id}`),
+        Markup.button.callback('✅ Finalize', `dep_finalize_${id}`)
+      ]
+    ]);
+  }
+  // REVERSED / FINALIZED (or anything unexpected) — nothing left to do.
+  return Markup.inlineKeyboard([]);
+}
+
 module.exports = {
   mainMenu,
+  persistentMenu,
   shareContactKeyboard,
   removeKeyboard,
   playKeyboard,
   walletKeyboard,
   adminPanelKeyboard,
-  approveDeclineKeyboard
+  approveDeclineKeyboard,
+  depositActionKeyboard
 };

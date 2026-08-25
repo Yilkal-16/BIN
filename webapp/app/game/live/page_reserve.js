@@ -79,7 +79,7 @@ function LiveContent() {
         <div className="flex items-center gap-3 flex-1">
           <StatChip label="Game" value={gameId?.slice(-8) || '—'} tone="slate" compact />
           <StatChip label="Bet" value="10" tone="sky" compact />
-          <StatChip label="ደራሽ" value={`1,250 ብር`} tone="gold" compact />
+          <StatChip label="ደራሽ" value={`1,200 ብር`} tone="gold" compact />
           <StatChip label="Called" value={gameState.calledNumbers.length} tone="emerald" compact />
         </div>
         <div className="flex items-center gap-2">
@@ -101,7 +101,7 @@ function LiveContent() {
           <div className="shrink-0 bg-[#1A1D24] rounded-xl border border-[#2A2F3A] p-2 flex items-center gap-3">
             {/* Circular number calling display */}
             <CurrentBallDisplay lastCalled={gameState.lastCalled} />
-
+            
             {/* Recent calls strip */}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
@@ -134,7 +134,7 @@ function LiveContent() {
             {!cartelasLoaded ? (
               <p className="text-center text-mute text-sm py-10">Loading cartela…</p>
             ) : isSpectator ? (
-              <NoCartelasBoughtPlaceholder />
+              <WatchingOnly />
             ) : (
               myCartelas.map((c) => <CartelaCard key={c.cartelaId} cartela={c} markedSet={markedSet} />)
             )}
@@ -197,7 +197,7 @@ function CurrentBallDisplay({ lastCalled }) {
   }
 
   const accent = COLUMN_ACCENTS[lastCalled.letter];
-
+  
   return (
     <div className="relative shrink-0">
       <div className={`w-14 h-14 rounded-full flex flex-col items-center justify-center bg-gradient-to-br ${accent.solid} shadow-lg ring-4 ${accent.ring}/30 transition-all duration-300 animate-popIn`}>
@@ -258,22 +258,18 @@ function CallerBoard({ calledNumbers, lastCalled }) {
   );
 }
 
-// --- COMPONENT: NO CARTELAS BOUGHT (spectator state) ---
-// Shown in the space where the player's cartela card(s) would normally sit,
-// for a player who reached the live round without buying a cartela. They
-// can still watch every number get called live — matching the "Watching
-// Only" pattern from Beteseb Bingo — instead of being locked out entirely.
-function NoCartelasBoughtPlaceholder() {
+// --- COMPONENT: WATCHING ONLY (spectator state) ---
+function WatchingOnly() {
   return (
     <div className="h-full flex flex-col items-center justify-center text-center px-3 py-8 bg-[#1A1D24] rounded-xl border border-[#2A2F3A]">
-      <div className="w-14 h-14 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-2xl mb-3">
-        🎟️
+      <div className="w-14 h-14 rounded-full bg-violet-500/10 border border-violet-500/30 flex items-center justify-center text-2xl mb-3">
+        👀
       </div>
-      <p className="text-ivory font-bold text-sm mb-2">WATCHING ONLY</p>
+      <p className="text-ivory font-bold text-sm mb-2">Watching Only</p>
       <p className="text-mute text-xs leading-relaxed">
-        You can still watch this round live.
+        የዚህ ዙር ጨዋታ ተጀምሯል።
         <br />
-        A new round starts automatically when it ends.
+        አዲስ ዙር እስኪጀምር እባክዎ ይጠብቁ።
       </p>
     </div>
   );
@@ -297,8 +293,8 @@ function CartelaCard({ cartela, markedSet }) {
         {LETTERS.map((l) => {
           const accent = COLUMN_ACCENTS[l];
           return (
-            <div
-              key={l}
+            <div 
+              key={l} 
               className={`text-center text-xs font-extrabold py-1 rounded ${accent.solid} text-white shadow-sm`}
             >
               {l}
@@ -311,7 +307,7 @@ function CartelaCard({ cartela, markedSet }) {
             const isFree = cell === null;
             const isMarked = isFree || markedSet.has(cell);
             const colAccent = COLUMN_ACCENTS[LETTERS[c]];
-
+            
             return (
               <div
                 key={`${r}-${c}`}

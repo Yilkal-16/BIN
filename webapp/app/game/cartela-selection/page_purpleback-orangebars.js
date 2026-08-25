@@ -224,9 +224,9 @@ function SelectionContent() {
       </header>
 
       {countdown != null && status === 'WAITING' && (
-        <div className="mb-4 flex items-center justify-center gap-2 bg-violet-500/10 border border-violet-400/30 rounded-chip py-2.5">
-          <span className="text-violet-200 text-xs font-medium">Selection closes in</span>
-          <span className="font-mono font-bold text-violet-300 text-lg tabular-nums">{countdown}s</span>
+        <div className="mb-4 flex items-center justify-center gap-2 bg-amber-500/10 border border-amber-500/30 rounded-chip py-2.5">
+          <span className="text-amber-200 text-xs font-medium">Selection closes in</span>
+          <span className="font-mono font-bold text-amber-400 text-lg tabular-nums">{countdown}s</span>
         </div>
       )}
 
@@ -259,7 +259,7 @@ function SelectionContent() {
                     className={[
                       'aspect-square rounded-chip text-xs font-mono font-semibold flex items-center justify-center transition-all',
                       isSelected
-                        ? 'bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white font-bold scale-105 shadow-lg shadow-violet-500/40 ring-2 ring-white/40'
+                        ? 'bg-gold text-ink font-bold scale-105 shadow-lg shadow-gold/30 ring-2 ring-indigo-400/70'
                         : isTaken
                         ? 'bg-surface text-line cursor-not-allowed'
                         : 'bg-surface2 text-ivory active:bg-line'
@@ -273,7 +273,7 @@ function SelectionContent() {
           </div>
 
           <div
-            className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[560px] bg-[#140f22] px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
+            className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[560px] bg-surface px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
             style={{ borderTop: '1px solid transparent', borderImage: 'linear-gradient(90deg, transparent, rgba(99,102,241,0.55), transparent) 1' }}
           >
             <div className="flex items-center justify-between mb-2 text-sm">
@@ -285,7 +285,7 @@ function SelectionContent() {
             <button
               onClick={handleBuy}
               disabled={selected.length === 0 || busy || !canAfford}
-              className="w-full bg-gradient-to-r from-violet-600 to-fuchsia-600 disabled:bg-line disabled:bg-none disabled:text-mute text-white font-display font-bold text-base py-4 rounded-card active:scale-[0.98] transition-transform shadow-lg shadow-violet-500/30 ring-1 ring-white/20 disabled:ring-0 disabled:shadow-none"
+              className="w-full bg-gold disabled:bg-line disabled:text-mute text-ink font-display font-bold text-base py-4 rounded-card active:scale-[0.98] transition-transform shadow-lg shadow-gold/20 ring-1 ring-indigo-400/40 disabled:ring-0 disabled:shadow-none"
             >
               {!canAfford && selected.length > 0 ? 'Insufficient balance' : busy ? 'Confirming…' : 'Buy Cartela(s)'}
             </button>
