@@ -98,7 +98,8 @@ function LiveContent() {
         <div className="flex items-center gap-3 flex-1">
           <StatChip label="Game" value={gameId?.slice(-8) || '—'} tone="slate" compact />
           <StatChip label="Bet" value={gameState.stake ?? '—'} tone="sky" compact />
-          <StatChip label="ደራሽ" value={`1,250 ብር`} tone="gold" compact />
+          // <StatChip label="ደራሽ" value={`1,250 ብር`} tone="gold" compact />
+          <StatChip label="ደራሽ" value={netPrizePool ? `${netPrizePool.toLocaleString()} ብር` : '—'} tone="gold" compact />
           <StatChip label="Called" value={gameState.calledNumbers.length} tone="emerald" compact />
         </div>
         <div className="flex items-center gap-2">
