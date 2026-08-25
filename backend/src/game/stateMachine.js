@@ -1,11 +1,9 @@
 const { Game, DrawSequence } = require('../models');
-const { generateGameId, getMinCartelasForStake } = require('../utils/helpers');
+const { generateGameId, STAKES, DEFAULT_STAKE } = require('../utils/helpers');
 const { getNextSequence } = require('../models/Counter');
 const { shuffle } = require('../utils/helpers');
 const cartelaService = require('../services/cartelaService');
 const logger = require('../utils/logger');
-
-const STAKE = Number(process.env.STAKE_AMOUNT || 10);
 
 /** Ensures at least 2 unused draw sequences exist, generating a batch of 12 if not (§6.2). */
 async function ensureDrawSequences() {
@@ -31,10 +29,17 @@ async function claimDrawSequence(gameId) {
 }
 
 /**
- * Creates a brand-new WAITING game: reserves a gameId, claims a draw
- * sequence, and pre-seeds the 600-cartela GameCartela pool (§6.4).
+ * Creates a brand-new WAITING game for a given stake tier: reserves a
+ * gameId, claims a draw sequence, and pre-seeds the 600-cartela
+ * GameCartela pool (§6.4). Multiple stake tiers (§4.5) run independently —
+ * each has its own concurrent WAITING/ACTIVE/SETTLING game, so `stake`
+ * scopes everything about this game to that tier alone.
  */
-async function createNewGame(rolloverFromGameId = null) {
+async function createNewGame(stake = DEFAULT_STAKE, rolloverFromGameId = null) {
+  if (!STAKES.includes(stake)) {
+    throw new Error(`Invalid stake ${stake} — must be one of ${STAKES.join(', ')}`);
+  }
+
   const today = new Date().toISOString().slice(2, 10).replace(/-/g, '');
   const seq = await getNextSequence(`gameId:${today}`);
   const gameId = generateGameId(seq);
@@ -49,7 +54,7 @@ async function createNewGame(rolloverFromGameId = null) {
 
   const game = await Game.create({
     gameId,
-    stake: STAKE,
+    stake,
     drawSequenceId: drawSequence._id,
     status: 'WAITING',
     currentDrawIndex: 0,
@@ -60,7 +65,7 @@ async function createNewGame(rolloverFromGameId = null) {
   });
 
   await cartelaService.createGameCartelaPool(gameId);
-  logger.info('Created new game', { gameId, rolloverFromGameId, rolloverAmount });
+  logger.info('Created new game', { gameId, stake, rolloverFromGameId, rolloverAmount });
   return game;
 }
 
@@ -79,15 +84,11 @@ async function transitionState(gameId, fromStatus, toStatus, extraSet = {}) {
   return updated;
 }
 
-function minCartelasForCurrentStake() {
-  return getMinCartelasForStake(STAKE);
-}
-
 module.exports = {
-  STAKE,
+  STAKES,
+  DEFAULT_STAKE,
   ensureDrawSequences,
   claimDrawSequence,
   createNewGame,
-  transitionState,
-  minCartelasForCurrentStake
+  transitionState
 };

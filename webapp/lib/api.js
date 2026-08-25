@@ -1,6 +1,9 @@
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
 const TOKEN_KEY = 'bingo_jwt';
 
+// Stake tiers (§4.5) — must match STAKES in the backend's utils/helpers.js.
+export const STAKES = [10, 20, 30, 50];
+
 export function getToken() {
   if (typeof window === 'undefined') return null;
   return window.sessionStorage.getItem(TOKEN_KEY);

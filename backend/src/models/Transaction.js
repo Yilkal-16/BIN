@@ -25,7 +25,6 @@ const transactionSchema = new Schema({
       'GAME_PURCHASE',
       'WINNING',
       'ADMIN_CREDIT',
-      'ADMIN_AUTO_PURCHASE', // House buys cartelas
       'HOUSE_COMMISSION', // 20% house cut
       'HOUSE_FRACTIONAL', // Fractional ETB remainder
       'HOUSE_WINNING', // Admin cartela wins

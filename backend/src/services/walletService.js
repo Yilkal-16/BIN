@@ -21,22 +21,20 @@ const REVERSAL_PENALTY_RATE = 0.4;
  * things under one balance unless read carefully: GAME_PURCHASE's
  * "+Amount (to pool)" is money entering *this round's escrow*, not the
  * house's own retained earnings — while HOUSE_COMMISSION / HOUSE_FRACTIONAL /
- * HOUSE_WINNING / ADMIN_AUTO_PURCHASE / ADMIN_CREDIT describe genuine
- * house-owned-money movements. Treating every row as an equally-real,
- * independently-additive mutation to the *same* balance double-counts
- * (verified by simulating full rounds both ways): commission would be taken
- * "on top of" money that GAME_PURCHASE already credited, rather than being a
- * slice of it.
+ * HOUSE_WINNING / ADMIN_CREDIT describe genuine house-owned-money movements.
+ * Treating every row as an equally-real, independently-additive mutation to
+ * the *same* balance double-counts (verified by simulating full rounds both
+ * ways): commission would be taken "on top of" money that GAME_PURCHASE
+ * already credited, rather than being a slice of it.
  *
  * The resolution that matches real cash flow exactly in every simulated
- * case (organic rounds, auto-allocated rounds, and admin-cartela-wins
- * rounds alike) is to let the round's escrow live on the Game document
- * itself (grossPrizePool / prizePool — already part of §9.3's schema) and
- * reserve House Wallet's `balance` for house-owned-money events only:
+ * case (organic rounds and admin-cartela-wins rounds alike) is to let the
+ * round's escrow live on the Game document itself (grossPrizePool /
+ * prizePool — already part of §9.3's schema) and reserve House Wallet's
+ * `balance` for house-owned-money events only:
  *
  *   GAME_PURCHASE (real player)         user -amount   house: no change (enters this game's escrow)
  *   WINNING       (real player wins)    user +amount   house: no change (paid out of that escrow)
- *   ADMIN_AUTO_PURCHASE                 —              house -= amount  (real spend, inflates the escrow)
  *   HOUSE_COMMISSION                    —              house += amount  (real earning, taken from the escrow)
  *   HOUSE_FRACTIONAL                    —              house += amount  (real earning, rounding leftover)
  *   HOUSE_WINNING (admin cartela wins)  —              house += amount  (that escrow share becomes house money)
@@ -50,7 +48,7 @@ const REVERSAL_PENALTY_RATE = 0.4;
  * §7.2 "authoritative source for all balance changes") is unaffected.
  * ============================================================================
  */
-const HOUSE_MUTATING_TYPES = new Set(['ADMIN_AUTO_PURCHASE', 'HOUSE_COMMISSION', 'HOUSE_FRACTIONAL', 'HOUSE_WINNING', 'ADMIN_CREDIT']);
+const HOUSE_MUTATING_TYPES = new Set(['HOUSE_COMMISSION', 'HOUSE_FRACTIONAL', 'HOUSE_WINNING', 'ADMIN_CREDIT']);
 
 async function nextReferenceId() {
   const seq = await getNextSequence(`referenceId:${new Date().toISOString().slice(0, 10)}`);

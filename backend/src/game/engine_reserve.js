@@ -7,7 +7,6 @@ const cartelaService = require('../services/cartelaService');
 const walletService = require('../services/walletService');
 const notificationService = require('../services/notificationService');
 const { HOUSE_TELEGRAM_ID } = require('../utils/bootstrap');
-const { STAKES } = require('../utils/helpers');
 const logger = require('../utils/logger');
 
 const SELECTION_TIME = scheduler.SELECTION_TIME;
@@ -106,11 +105,6 @@ async function runActiveGameplayPhase(game) {
   if (!started) throw new Error(`Failed to transition ${game.gameId} WAITING -> ACTIVE`);
   Object.assign(game, started.toObject());
   notificationService.emitToGame(game.gameId, 'game_cycle_update', { newState: 'ACTIVE', nextState: 'ACTIVE' });
-  // §2.3: game_state_update must fire on every status change, not just into
-  // WAITING — clients (e.g. the cartela-selection page) key off this event's
-  // `status` field to know the round went live and to redirect players who
-  // didn't buy a cartela into the live/spectator view in real time.
-  await broadcastGameState(game);
 
   const drawSequence = await DrawSequence.findById(game.drawSequenceId);
 
@@ -319,9 +313,9 @@ async function notifyWinners(game) {
   }
 }
 
-/** One full lifecycle pass for a given stake tier: WAITING -> ACTIVE -> SETTLING -> COMPLETED. */
-async function runOneGame(stake, rolloverFromGameId = null) {
-  const game = await stateMachine.createNewGame(stake, rolloverFromGameId);
+/** One full lifecycle pass: WAITING -> ACTIVE -> SETTLING -> COMPLETED. */
+async function runOneGame(rolloverFromGameId = null) {
+  const game = await stateMachine.createNewGame(rolloverFromGameId);
   const waitResult = await runWaitingPhase(game);
   if (waitResult.aborted) return;
 
@@ -339,18 +333,17 @@ async function runOneGame(stake, rolloverFromGameId = null) {
 }
 
 /**
- * Crash recovery (§12): on boot, resume any game left mid-flight for this
- * stake tier rather than starting fresh and orphaning it. Each stake tier
- * (§4.5) runs its own independent game, so recovery is scoped per stake.
+ * Crash recovery (§12): on boot, resume any game left mid-flight rather than
+ * starting fresh and orphaning it.
  */
-async function recoverOnBootForStake(stake) {
-  const inFlight = await Game.findOne({ stake, status: { $in: ['WAITING', 'ACTIVE', 'SETTLING'] } }).sort({ startTime: -1 });
+async function recoverOnBoot() {
+  const inFlight = await Game.findOne({ status: { $in: ['WAITING', 'ACTIVE', 'SETTLING'] } }).sort({ startTime: -1 });
   if (!inFlight) {
-    logger.info('No in-flight game found on boot for stake — starting fresh', { stake });
+    logger.info('No in-flight game found on boot — starting fresh');
     return null;
   }
 
-  logger.info('Resuming in-flight game after restart', { gameId: inFlight.gameId, stake, status: inFlight.status });
+  logger.info('Resuming in-flight game after restart', { gameId: inFlight.gameId, status: inFlight.status });
 
   if (inFlight.status === 'SETTLING') {
     // Settlement either fully committed (status would already be COMPLETED,
@@ -388,30 +381,29 @@ async function recoverOnBootForStake(stake) {
   return { settledGameId: settled.gameId, noWinner };
 }
 
-/**
- * Runs the continuous WAITING -> ACTIVE -> SETTLING -> COMPLETED cycle for
- * one stake tier, forever, until stop() is called. Each stake tier's loop
- * is fully independent — its own current game, its own rollover chain —
- * they just happen to run concurrently within the same process.
- */
-async function runStakeLoop(stake) {
+/** Starts the continuous engine loop. Never resolves until stop() is called. */
+async function start() {
+  if (running) return;
+  running = true;
+  stopRequested = false;
+  logger.info('Game engine starting');
+
   let rolloverFromGameId = null;
   try {
-    const recovered = await recoverOnBootForStake(stake);
+    const recovered = await recoverOnBoot();
     if (recovered && recovered.noWinner) rolloverFromGameId = recovered.settledGameId || null;
   } catch (err) {
-    logger.error('Crash recovery failed — starting a fresh game instead', { stake, error: err.message, stack: err.stack });
+    logger.error('Crash recovery failed — starting a fresh game instead', { error: err.message, stack: err.stack });
   }
 
   while (!stopRequested) {
     try {
       await waitWhilePaused();
       if (stopRequested) break;
-      const result = await runOneGame(stake, rolloverFromGameId);
+      const result = await runOneGame(rolloverFromGameId);
       rolloverFromGameId = result && result.noWinner ? result.settledGameId : null;
     } catch (err) {
       logger.error('Game loop iteration failed — retrying with a fresh game after a short pause', {
-        stake,
         error: err.message,
         stack: err.stack
       });
@@ -419,21 +411,6 @@ async function runStakeLoop(stake) {
       rolloverFromGameId = null;
     }
   }
-}
-
-/**
- * Starts one continuous engine loop per stake tier (§4.5), running
- * concurrently. Never resolves until stop() is called and every tier's
- * loop has wound down.
- */
-async function start() {
-  if (running) return;
-  running = true;
-  stopRequested = false;
-  logger.info('Game engine starting', { stakes: STAKES });
-
-  await Promise.all(STAKES.map((stake) => runStakeLoop(stake)));
-
   running = false;
 }
 

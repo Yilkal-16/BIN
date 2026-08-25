@@ -1,14 +1,14 @@
 'use client';
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import AuthGate from '../../../components/AuthGate';
 import { useTelegramUser } from '../../../components/TelegramProvider';
 import { useWebSocket } from '../../../hooks/useWebSocket';
-import { api } from '../../../lib/api';
+import { api, STAKES } from '../../../lib/api';
 import { hapticFeedback, notifyHaptic } from '../../../lib/telegram';
 
-const MAX_SELECTABLE = 3;
-const TOTAL_CARTELAS = 120;
+const MAX_SELECTABLE = 2;
+const TOTAL_CARTELAS = 256;
 
 // B/I/N/G/O accent colors — shared "brand" for the whole game flow so the
 // selection grid and the live board read as the same product.
@@ -23,6 +23,9 @@ const COLUMN_ACCENTS = {
 function SelectionContent() {
   const { user, refreshProfile } = useTelegramUser();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const stakeParam = Number(searchParams.get('stake'));
+  const stake = STAKES.includes(stakeParam) ? stakeParam : STAKES[0];
   const { socket, connected } = useWebSocket();
 
   const [gameId, setGameId] = useState(null);
@@ -59,7 +62,7 @@ function SelectionContent() {
   useEffect(() => {
     (async () => {
       try {
-        const { gameState } = await api.getLobby(10);
+        const { gameState } = await api.getLobby(stake);
         setGameId(gameState.gameId);
         setStatus(gameState.status);
         if (gameState.status === 'WAITING') {
@@ -71,7 +74,7 @@ function SelectionContent() {
         setLoading(false);
       }
     })();
-  }, [loadAvailability]);
+  }, [loadAvailability, stake]);
 
   // Once a round is live, send everyone straight to the live page — whether
   // or not they bought a cartela in time. This mirrors Beteseb Bingo: a
@@ -186,7 +189,7 @@ function SelectionContent() {
     }
   };
 
-  const totalCost = selected.length * 10;
+  const totalCost = selected.length * stake;
   const canAfford = user.mainWalletBalance >= totalCost;
   // Once the round isn't WAITING anymore, the effect above is already
   // sending the player to the live page — show a brief "joining" spinner
@@ -215,7 +218,7 @@ function SelectionContent() {
         </button>
         <div className="text-center">
           <p className="text-mute text-[11px] uppercase tracking-wide">Stake</p>
-          <p className="font-display font-bold text-gold text-lg drop-shadow-[0_0_12px_rgba(99,102,241,0.4)]">10 Birr</p>
+          <p className="font-display font-bold text-gold text-lg drop-shadow-[0_0_12px_rgba(99,102,241,0.4)]">{stake} Birr</p>
         </div>
         <div className="text-right">
           <p className="text-mute text-[11px] uppercase tracking-wide">Balance</p>

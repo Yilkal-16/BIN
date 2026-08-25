@@ -1,10 +1,9 @@
 const mongoose = require('mongoose');
-const { Cartela, GameCartela, Game, User, Transaction, HouseWallet } = require('../models');
+const { Cartela, GameCartela, Game, User, Transaction } = require('../models');
 const { ApiError } = require('../middleware/errorHandler');
 const walletService = require('./walletService');
 const logger = require('../utils/logger');
 
-const STAKE = Number(process.env.STAKE_AMOUNT || 10);
 const MAX_PER_USER = Number(process.env.MAX_CARTELAS_PER_USER || 2);
 
 /**
@@ -137,7 +136,7 @@ async function purchaseCartelas(gameId, userId, cartelaIds) {
         }
       }
 
-      totalCost = toCharge.length * STAKE;
+      totalCost = toCharge.length * game.stake;
       if (totalCost > 0) {
         if (user.mainWalletBalance < totalCost) {
           throw new ApiError(400, 'INSUFFICIENT_BALANCE', 'Insufficient balance to purchase cartela(s).', {
@@ -179,103 +178,6 @@ async function purchaseCartelas(gameId, userId, cartelaIds) {
   };
 }
 
-/**
- * Admin auto-allocation (§6.3/§6.4/§6.5). Claims up to `count` unclaimed,
- * non-reserved cartelas for 'system-admin', funded from the House Wallet.
- * If the House Wallet can't cover the batch, allocates as many as it can
- * afford and logs the shortfall (§12 "House Wallet Insufficient Funds").
- */
-async function allocateToSystemAdmin(gameId, count) {
-  if (count <= 0) return { allocated: 0 };
-
-  const candidates = await GameCartela.find({ gameId, ownerId: null }, { cartelaId: 1 })
-    .limit(count)
-    .lean();
-  if (candidates.length === 0) return { allocated: 0 };
-
-  const session = await mongoose.startSession();
-  let allocated = 0;
-  try {
-    await session.withTransaction(async () => {
-      const house = await HouseWallet.findOne({ walletId: 'house' }).session(session);
-      const affordable = Math.max(0, Math.floor(house.balance / STAKE));
-      const toAllocate = candidates.slice(0, Math.min(candidates.length, affordable));
-
-      if (toAllocate.length < candidates.length) {
-        logger.warn('House Wallet insufficient for full auto-allocation batch', {
-          gameId,
-          requested: candidates.length,
-          affordable: toAllocate.length,
-          houseBalance: house.balance
-        });
-      }
-
-      // Single bulk claim instead of N sequential findOneAndUpdate calls.
-      // The old version awaited one Mongo round-trip PER cartela inside
-      // this transaction — when a real purchase lands late in the WAITING
-      // window (a normal occurrence, not an edge case), scheduler.js
-      // correctly has to fill the entire remaining deficit in a single
-      // tick, which meant this loop alone could take multiple seconds
-      // (minCartelas x one round-trip each) and directly delayed the
-      // WAITING -> ACTIVE transition, since runWaitingPhase can't return
-      // (and engine.js can't emit the ACTIVE game_cycle_update) until this
-      // finishes. Safe as one atomic updateMany because this only ever
-      // runs while engine.js holds the per-game auto-allocate lock, so no
-      // concurrent auto-allocation call can race against these same
-      // documents — the only remaining race is a genuine user purchase,
-      // which the ownerId: null filter still protects against, and the
-      // requery below re-derives exactly which ids we actually got.
-      const purchasedAt = new Date();
-      const candidateIds = toAllocate.map((c) => c.cartelaId);
-      const updateResult = await GameCartela.updateMany(
-        { gameId, cartelaId: { $in: candidateIds }, ownerId: null },
-        { $set: { ownerId: 'system-admin', purchasedAt } },
-        { session }
-      );
-      if (!updateResult.modifiedCount) return;
-
-      const claimedDocs = await GameCartela.find(
-        { gameId, cartelaId: { $in: candidateIds }, ownerId: 'system-admin', purchasedAt },
-        { cartelaId: 1 }
-      )
-        .session(session)
-        .lean();
-      const claimedIds = claimedDocs.map((c) => c.cartelaId);
-      if (claimedIds.length === 0) return;
-
-      const cost = claimedIds.length * STAKE;
-      const referenceId = await walletService.nextReferenceId();
-      // Real house money is used to fund this batch — see the House Wallet
-      // accounting note at the top of walletService.js.
-      const houseUser = await User.findOne({ telegramId: 'SYSTEM_HOUSE' }).session(session);
-      await Transaction.create(
-        [{
-          userId: houseUser._id,
-          type: 'ADMIN_AUTO_PURCHASE',
-          amount: cost,
-          referenceId,
-          gameId,
-          cartelaIds: claimedIds,
-          status: 'COMPLETED',
-          description: `Auto-allocated ${claimedIds.length} cartela(s) to fill minimum pool`
-        }],
-        { session }
-      );
-      house.balance -= cost;
-      await house.save({ session });
-
-      const game = await Game.findOne({ gameId }).session(session);
-      game.grossPrizePool = (game.grossPrizePool || 0) + cost;
-      await game.save({ session });
-
-      allocated = claimedIds.length;
-    });
-  } finally {
-    session.endSession();
-  }
-  return { allocated };
-}
-
 /** A single user's owned cartelas (with grids) within a game — powers the live gameplay screen. */
 async function getUserCartelas(gameId, userId) {
   const owned = await GameCartela.find({ gameId, ownerId: String(userId) }, { cartelaId: 1, isWinner: 1 }).lean();
@@ -287,7 +189,6 @@ async function getUserCartelas(gameId, userId) {
 }
 
 module.exports = {
-  STAKE,
   MAX_PER_USER,
   createGameCartelaPool,
   listAvailableCartelas,
@@ -295,6 +196,5 @@ module.exports = {
   getGameCartelasWithGrids,
   getUserCartelas,
   claimCartela,
-  purchaseCartelas,
-  allocateToSystemAdmin
+  purchaseCartelas
 };

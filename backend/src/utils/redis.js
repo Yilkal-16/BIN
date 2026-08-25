@@ -3,7 +3,7 @@ const logger = require('./logger');
 
 /**
  * Primary Redis client (Upstash REST API). Used for:
- *  - distributed locks (start game / auto-allocate)
+ *  - distributed locks (e.g. start game)
  *  - rate limiting counters
  *  - admin PIN attempt tracking
  *  - lightweight caching of ephemeral game state

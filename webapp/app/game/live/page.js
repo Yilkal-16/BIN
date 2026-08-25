@@ -5,7 +5,7 @@ import AuthGate from '../../../components/AuthGate';
 import { useWebSocket } from '../../../hooks/useWebSocket';
 import { useGameState } from '../../../hooks/useGameState';
 import { api } from '../../../lib/api';
-import { notifyHaptic } from '../../../lib/telegram';
+import { hapticFeedback, notifyHaptic } from '../../../lib/telegram';
 
 // --- CONSTANTS ---
 const LETTERS = ['B', 'I', 'N', 'G', 'O'];
@@ -21,6 +21,8 @@ function letterFor(n) {
   return LETTERS[Math.floor((n - 1) / 15)];
 }
 
+const EMPTY_SET = new Set();
+
 function LiveContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -31,10 +33,12 @@ function LiveContent() {
   const [myCartelas, setMyCartelas] = useState([]);
   const [cartelasLoaded, setCartelasLoaded] = useState(false);
   const [autoMode, setAutoMode] = useState(true);
+  const [manualMarks, setManualMarks] = useState({}); // cartelaId -> Set of manually-daubed numbers
   const [navigatedAway, setNavigatedAway] = useState(false);
 
   useEffect(() => {
     if (!gameId) return;
+    setManualMarks({}); // fresh round — clear any manual daubs from the previous one
     api
       .getMyCartelas(gameId)
       .then(({ cartelas }) => setMyCartelas(cartelas))
@@ -67,6 +71,21 @@ function LiveContent() {
   const netPrizePool = gameState.grossPrizePool ? Math.floor(gameState.grossPrizePool * 0.8) : 0;
   const isSpectator = cartelasLoaded && myCartelas.length === 0;
 
+  // Manual mode: the player taps their own cells to daub them. Server-side
+  // winner detection always runs off the actually-called numbers regardless
+  // (§4.7/§6.6) — this only controls what's visually marked, so a tap only
+  // does anything for a number that's already been called.
+  const toggleManualDaub = (cartelaId, number) => {
+    if (autoMode || !markedSet.has(number)) return;
+    hapticFeedback('light');
+    setManualMarks((prev) => {
+      const current = new Set(prev[cartelaId]);
+      if (current.has(number)) current.delete(number);
+      else current.add(number);
+      return { ...prev, [cartelaId]: current };
+    });
+  };
+
   // Get last 10 called numbers for recent calls display
   const recentCalls = useMemo(() => {
     return [...gameState.calledNumbers].reverse().slice(0, 10);
@@ -78,7 +97,7 @@ function LiveContent() {
       <header className="px-3 py-2.5 bg-[#1A1D24] border-b border-[#2A2F3A] flex items-center gap-2 shrink-0">
         <div className="flex items-center gap-3 flex-1">
           <StatChip label="Game" value={gameId?.slice(-8) || '—'} tone="slate" compact />
-          <StatChip label="Bet" value="10" tone="sky" compact />
+          <StatChip label="Bet" value={gameState.stake ?? '—'} tone="sky" compact />
           <StatChip label="ደራሽ" value={`1,250 ብር`} tone="gold" compact />
           <StatChip label="Called" value={gameState.calledNumbers.length} tone="emerald" compact />
         </div>
@@ -136,7 +155,16 @@ function LiveContent() {
             ) : isSpectator ? (
               <NoCartelasBoughtPlaceholder />
             ) : (
-              myCartelas.map((c) => <CartelaCard key={c.cartelaId} cartela={c} markedSet={markedSet} />)
+              myCartelas.map((c) => (
+                <CartelaCard
+                  key={c.cartelaId}
+                  cartela={c}
+                  calledSet={markedSet}
+                  autoMode={autoMode}
+                  manualMarked={manualMarks[c.cartelaId] || EMPTY_SET}
+                  onCellTap={(number) => toggleManualDaub(c.cartelaId, number)}
+                />
+              ))
             )}
           </div>
         </div>
@@ -280,7 +308,12 @@ function NoCartelasBoughtPlaceholder() {
 }
 
 // --- COMPONENT: CARTELA CARD ---
-function CartelaCard({ cartela, markedSet }) {
+// Auto mode: every called number is daubed automatically. Manual mode: the
+// player taps a cell themselves to daub it — only numbers that have
+// actually been called respond to a tap. Either way, server-side winner
+// detection runs off the real called numbers (§4.7/§6.6), so this is purely
+// a visual/interaction preference, never a gameplay requirement.
+function CartelaCard({ cartela, calledSet, autoMode, manualMarked, onCellTap }) {
   return (
     <div
       className={`rounded-xl border p-2 ${
@@ -309,18 +342,28 @@ function CartelaCard({ cartela, markedSet }) {
         {cartela.grid.map((row, r) =>
           row.map((cell, c) => {
             const isFree = cell === null;
-            const isMarked = isFree || markedSet.has(cell);
+            const isCalled = isFree || calledSet.has(cell);
+            const isMarked = autoMode ? isCalled : isFree || manualMarked.has(cell);
+            // In manual mode, any called (non-free) cell can be tapped to
+            // toggle its daub on/off; a called-but-not-yet-daubed cell gets
+            // a distinct "ready to daub" pulse so it's clear it's tappable.
+            const isClickable = !autoMode && !isFree && isCalled;
+            const needsAttention = isClickable && !isMarked;
             const colAccent = COLUMN_ACCENTS[LETTERS[c]];
 
             return (
               <div
                 key={`${r}-${c}`}
+                onClick={isClickable ? () => onCellTap(cell) : undefined}
+                role={isClickable ? 'button' : undefined}
                 className={[
-                  'aspect-square rounded flex items-center justify-center text-xs font-mono font-bold',
+                  'aspect-square rounded flex items-center justify-center text-xs font-mono font-bold transition-colors',
                   isFree
                     ? 'bg-emerald-500/20 text-emerald-400'
                     : isMarked
-                    ? 'bg-amber-400 text-ink'
+                    ? `bg-amber-400 text-ink${isClickable ? ' cursor-pointer' : ''}`
+                    : needsAttention
+                    ? `bg-[#252A34] ${colAccent.text} ring-2 ring-amber-400/70 animate-pulse cursor-pointer`
                     : `bg-[#252A34] ${colAccent.text}`
                 ].join(' ')}
               >

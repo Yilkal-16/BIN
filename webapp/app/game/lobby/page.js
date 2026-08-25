@@ -3,34 +3,42 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import AuthGate from '../../../components/AuthGate';
 import { useTelegramUser } from '../../../components/TelegramProvider';
-import { api } from '../../../lib/api';
+import { api, STAKES } from '../../../lib/api';
 import { hapticFeedback } from '../../../lib/telegram';
 
 function LobbyContent() {
   const { user } = useTelegramUser();
   const router = useRouter();
+  const [stake, setStake] = useState(STAKES[0]);
   const [lobby, setLobby] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (selectedStake) => {
     setLoading(true);
     setError(null);
     try {
-      const { gameState } = await api.getLobby(10);
+      const { gameState } = await api.getLobby(selectedStake);
       setLobby(gameState);
     } catch (err) {
       setError(err.message);
+      setLobby(null);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(stake); }, [load, stake]);
+
+  const handleSelectStake = (s) => {
+    if (s === stake) return;
+    hapticFeedback('light');
+    setStake(s);
+  };
 
   const handleJoin = () => {
     hapticFeedback('medium');
-    router.push('/game/cartela-selection');
+    router.push(`/game/cartela-selection?stake=${stake}`);
   };
 
   return (
@@ -46,10 +54,27 @@ function LobbyContent() {
         </div>
       </header>
 
+      <p className="text-mute text-xs uppercase tracking-[0.18em] mb-2">Choose a stake</p>
+      <div className="grid grid-cols-4 gap-2 mb-6">
+        {STAKES.map((s) => (
+          <button
+            key={s}
+            onClick={() => handleSelectStake(s)}
+            className={`rounded-chip py-3 font-display font-bold text-sm transition-transform active:scale-[0.97] ${
+              s === stake
+                ? 'bg-gold text-ink shadow-lg shadow-gold/20'
+                : 'bg-surface2 text-ivory border border-line'
+            }`}
+          >
+            {s}
+          </button>
+        ))}
+      </div>
+
       <div className="relative rounded-card overflow-hidden bg-gradient-to-br from-surface2 to-surface border border-line p-6 mb-6">
         <div className="absolute -right-8 -top-8 w-32 h-32 rounded-full bg-gold/10" />
         <p className="text-mute text-xs uppercase tracking-[0.18em] mb-1">Stake</p>
-        <p className="font-display font-bold text-4xl text-gold mb-4">10 <span className="text-lg text-mute font-body font-normal">Birr / cartela</span></p>
+        <p className="font-display font-bold text-4xl text-gold mb-4">{stake} <span className="text-lg text-mute font-body font-normal">Birr / cartela</span></p>
 
         {loading ? (
           <div className="h-16 flex items-center text-mute text-sm">Checking the room…</div>
@@ -70,7 +95,7 @@ function LobbyContent() {
         Play Now
       </button>
 
-      <button onClick={load} className="w-full text-mute text-xs mt-4 py-2">
+      <button onClick={() => load(stake)} className="w-full text-mute text-xs mt-4 py-2">
         Refresh
       </button>
     </div>

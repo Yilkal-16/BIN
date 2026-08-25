@@ -25,20 +25,12 @@ function generateWithdrawalDisplayId(objectId) {
 }
 
 /**
- * §14.1 lists MIN_CARTELAS=150 directly as a settable env var (with the
- * formula below as the *reasoning* for that default, now that v7.1 is a
- * single stake tier and the value no longer needs to vary per-stake the way
- * it would have under multi-stake). Read it directly when set; fall back to
- * computing it from MIN_PRIZE_POOL/HOUSE_COMMISSION/STAKE_AMOUNT so the
- * system still works sensibly if an operator changes the stake without
- * remembering to update MIN_CARTELAS too.
+ * §4.5 stake tiers: the game runs one independent, concurrently-running
+ * round per tier (its own WAITING/ACTIVE/SETTLING lifecycle and cartela
+ * pool) rather than a single shared round.
  */
-function getMinCartelasForStake(stake) {
-  if (process.env.MIN_CARTELAS) return Number(process.env.MIN_CARTELAS);
-  const MIN_PRIZE_POOL = Number(process.env.MIN_PRIZE_POOL || 1200);
-  const HOUSE_COMMISSION = Number(process.env.HOUSE_COMMISSION || 0.2);
-  return Math.ceil(MIN_PRIZE_POOL / (stake * (1 - HOUSE_COMMISSION)));
-}
+const STAKES = [10, 20, 30, 50];
+const DEFAULT_STAKE = STAKES[0];
 
 /** Standard success envelope. */
 function ok(res, data, status = 200) {
@@ -88,7 +80,8 @@ module.exports = {
   generateGameId,
   generateReferenceId,
   generateWithdrawalDisplayId,
-  getMinCartelasForStake,
+  STAKES,
+  DEFAULT_STAKE,
   ok,
   fail,
   paginationParams,

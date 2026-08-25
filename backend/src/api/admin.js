@@ -10,7 +10,7 @@ const router = express.Router();
 router.use(requireAuth, requireAdmin);
 
 router.get('/dashboard', asyncHandler(async (req, res) => {
-  const [house, pendingDeposits, reversibleDeposits, pendingWithdrawals, totalUsers, activeGame] = await Promise.all([
+  const [house, pendingDeposits, reversibleDeposits, pendingWithdrawals, totalUsers, activeGames] = await Promise.all([
     HouseWallet.findOne({ walletId: 'house' }),
     // Deposits never sit at PENDING (see walletService.submitDeposit) — a
     // deposit needing admin action is either MANUAL_REVIEW (needs APPROVE)
@@ -20,7 +20,9 @@ router.get('/dashboard', asyncHandler(async (req, res) => {
     AdminRequest.countDocuments({ type: 'DEPOSIT', status: 'APPROVED' }),
     AdminRequest.countDocuments({ type: 'WITHDRAW', status: 'PENDING' }),
     User.countDocuments({ isAdmin: false }),
-    Game.findOne({ status: { $in: ['WAITING', 'ACTIVE', 'SETTLING'] } }).sort({ startTime: -1 })
+    // Each stake tier (§4.5) runs its own concurrent game, so more than one
+    // can be in-flight at once — return every active tier, not just one.
+    Game.find({ status: { $in: ['WAITING', 'ACTIVE', 'SETTLING'] } }).sort({ stake: 1 })
   ]);
   return ok(res, {
     houseWalletBalance: house ? house.balance : 0,
@@ -29,9 +31,12 @@ router.get('/dashboard', asyncHandler(async (req, res) => {
     pendingWithdrawals,
     totalUsers,
     enginePaused: engine.isPaused(),
-    activeGame: activeGame
-      ? { gameId: activeGame.gameId, status: activeGame.status, currentDrawIndex: activeGame.currentDrawIndex }
-      : null
+    activeGames: activeGames.map((g) => ({
+      gameId: g.gameId,
+      stake: g.stake,
+      status: g.status,
+      currentDrawIndex: g.currentDrawIndex
+    }))
   });
 }));
 
