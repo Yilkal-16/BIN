@@ -6,8 +6,7 @@ const winnerSchema = new Schema(
     ownerId: { type: String, required: true }, // userId (Mongo _id as string) OR 'system-admin'
     cartelaId: { type: Number, required: true },
     prizeAmount: { type: Number, required: true },
-    pattern: { type: [String], default: [] }, // matched patterns, for display only
-    displayName: { type: String, default: null } // snapshot of the winner's User.displayName at settlement time
+    pattern: { type: [String], default: [] } // matched patterns, for display only
   },
   { _id: false }
 );
