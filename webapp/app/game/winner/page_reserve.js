@@ -83,8 +83,9 @@ function WinnerContent() {
             {game.winners.map((w, i) => (
               <div key={i} className="flex items-center justify-between bg-surface border border-line rounded-chip px-4 py-3">
                 <div className="text-left">
-                  <p className="font-display font-bold text-lg text-ivory">{winnerHeadline(w, user)}</p>
                   <p className="font-mono text-sm text-ivory">Cartela #{w.cartelaId}</p>
+                  <p className="text-ivory/80 text-xs">{winnerName(w, user)}</p>
+                  <p className="text-mute text-[11px]">{winnerLabel(w, user)}</p>
                 </div>
                 <p className="font-display font-semibold text-emerald">+{w.prizeAmount} Birr</p>
               </div>
@@ -98,10 +99,16 @@ function WinnerContent() {
   );
 }
 
-function winnerHeadline(winner, user) {
+function winnerName(winner, user) {
+  if (!winner.ownerId || winner.ownerId === 'system-admin') return 'House Cartela';
+  if (user.id && winner.ownerId.toString() === user.id.toString()) return user.displayName || user.username || 'You';
+  return winner.displayName || 'Player';
+}
+
+function winnerLabel(winner, user) {
   if (!winner.ownerId || winner.ownerId === 'system-admin') return 'CARTELA WON!';
-  if (user.id && winner.ownerId.toString() === user.id.toString()) return 'You Won';
-  return `${winner.displayName || 'Player'} Won`;
+  if (user.id && winner.ownerId.toString() === user.id.toString()) return 'You won!';
+  return 'Won this round';
 }
 
 export default function WinnerPage() {
