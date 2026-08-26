@@ -265,24 +265,11 @@ async function settleGame(gameId, winners, noWinner) {
           { $set: { isWinner: true } }
         ).session(session);
 
-        // displayName is fetched here and stored directly on the persisted
-        // record — game.winners (what getGameState returns, and what the
-        // frontend winner page polls) previously only carried ownerId, so
-        // every player besides yourself always showed the 'Player' fallback.
-        // notifyWinners()'s socket payload attached displayName separately,
-        // but that's a one-shot push, not what the winner page reads from.
-        let winnerDisplayName = null;
-        if (winner.ownerId !== 'system-admin') {
-          const winnerUser = await User.findById(winner.ownerId).session(session);
-          winnerDisplayName = winnerUser?.displayName || null;
-        }
-
         winnerRecords.push({
           ownerId: winner.ownerId,
           cartelaId: winner.cartelaId,
           prizeAmount: perWinner,
-          pattern: winner.patterns,
-          displayName: winnerDisplayName
+          pattern: winner.patterns
         });
       }
 
