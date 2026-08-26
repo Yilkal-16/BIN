@@ -142,16 +142,6 @@ function SelectionContent() {
     };
   }, [socket, connected, gameId, router, loadAvailability]);
 
-  // The server only pushes a fresh countdown_update every few seconds, so
-  // relying on that alone makes the on-screen number jump instead of
-  // ticking down. Run a local one-second interval between updates, and let
-  // each incoming socket payload resync the value so drift never builds up.
-  useEffect(() => {
-    if (countdown == null || status !== 'WAITING') return undefined;
-    const t = setInterval(() => setCountdown((c) => (c == null ? c : Math.max(0, c - 1))), 1000);
-    return () => clearInterval(t);
-  }, [countdown != null, status]);
-
   const toggleCartela = (id) => {
     if (takenIds.has(id) || purchasedRef.current) return;
     setSelected((prev) => {
