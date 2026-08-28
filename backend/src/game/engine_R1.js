@@ -6,7 +6,6 @@ const winnerDetection = require('./winnerDetection');
 const cartelaService = require('../services/cartelaService');
 const walletService = require('../services/walletService');
 const notificationService = require('../services/notificationService');
-const engineLock = require('./engineLock');
 const { HOUSE_TELEGRAM_ID } = require('../utils/bootstrap');
 const { STAKES } = require('../utils/helpers');
 const logger = require('../utils/logger');
@@ -439,56 +438,16 @@ async function runStakeLoop(stake) {
  * Starts one continuous engine loop per stake tier (§4.5), running
  * concurrently. Never resolves until stop() is called and every tier's
  * loop has wound down.
- *
- * Gated on a distributed lock (§12 addendum, see engineLock.js): Render's
- * zero-downtime deploys run the outgoing and incoming instance side by side
- * for up to ~60s, and both instances call start() independently on boot.
- * Without this gate, both would drive the same in-flight game documents at
- * once, producing "State transition precondition failed (concurrent
- * writer?)" errors and potentially duplicate concurrent games per stake.
- * Only the lock holder runs the stake loops; everyone else waits and
- * retries until the current holder's lease lapses (it exited, or its
- * SIGTERM shutdown finished) or is force-stopped locally.
  */
 async function start() {
   if (running) return;
   running = true;
   stopRequested = false;
+  logger.info('Game engine starting', { stakes: STAKES });
 
-  const holderId = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  let renewTimer = null;
+  await Promise.all(STAKES.map((stake) => runStakeLoop(stake)));
 
-  try {
-    logger.info('Game engine waiting for lock', { holderId, stakes: STAKES });
-
-    while (!stopRequested) {
-      const acquired = await engineLock.tryAcquire(holderId);
-      if (acquired) break;
-      await sleep(engineLock.ACQUIRE_RETRY_MS);
-    }
-    if (stopRequested) return;
-
-    logger.info('Engine lock acquired — starting stake loops', { holderId, stakes: STAKES });
-
-    renewTimer = setInterval(async () => {
-      const stillHeld = await engineLock.renew(holderId).catch((err) => {
-        logger.error('Engine lock renewal errored', { holderId, error: err.message });
-        return false;
-      });
-      if (!stillHeld) {
-        logger.error('Lost engine lock — stopping loops immediately to avoid a split-brain writer', { holderId });
-        stopRequested = true;
-      }
-    }, engineLock.RENEW_MS);
-
-    await Promise.all(STAKES.map((stake) => runStakeLoop(stake)));
-  } finally {
-    if (renewTimer) clearInterval(renewTimer);
-    await engineLock.release(holderId).catch((err) => {
-      logger.error('Failed to release engine lock on shutdown', { holderId, error: err.message });
-    });
-    running = false;
-  }
+  running = false;
 }
 
 function stop() {
