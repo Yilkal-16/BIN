@@ -50,16 +50,8 @@ const REVERSAL_PENALTY_RATE = 0.4;
  */
 const HOUSE_MUTATING_TYPES = new Set(['HOUSE_COMMISSION', 'HOUSE_FRACTIONAL', 'HOUSE_WINNING', 'ADMIN_CREDIT']);
 
-/**
- * `session` is optional — pass a Mongo session when this reference ID is
- * being generated inside a session.withTransaction(...) block, so the
- * counter increment commits (or rolls back) atomically together with the
- * document(s) it's for, rather than as an independent side effect that can
- * outlive an aborted/retried transaction. See Counter.js's getNextSequence
- * for the full rationale.
- */
-async function nextReferenceId(session) {
-  const seq = await getNextSequence(`referenceId:${new Date().toISOString().slice(0, 10)}`, session);
+async function nextReferenceId() {
+  const seq = await getNextSequence(`referenceId:${new Date().toISOString().slice(0, 10)}`);
   return generateReferenceId(seq);
 }
 
@@ -154,10 +146,6 @@ async function submitDeposit(userId, amount, rawProof) {
     }
   }
 
-  // Not run inside a session: this single Transaction.create() below is
-  // already atomic on its own (one document, one write), so there's no
-  // multi-step transaction for the counter increment to join. On failure
-  // this reference number is simply skipped (a gap, not a collision risk).
   const referenceId = await nextReferenceId();
   let transaction;
   try {
@@ -380,10 +368,10 @@ async function declineDeposit(adminRequestId, adminId, reason) {
 /** Admin manually credits a user's wallet, funded from the House Wallet (§7.2). */
 async function adminCredit(targetUserId, amount, adminId, description = 'Manual admin credit') {
   if (!(amount > 0)) throw new ApiError(400, 'INVALID_AMOUNT', 'Credit amount must be positive');
+  const referenceId = await nextReferenceId();
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {
-      const referenceId = await nextReferenceId(session);
       await Transaction.create(
         [{ userId: targetUserId, type: 'ADMIN_CREDIT', amount, referenceId, status: 'COMPLETED', description, metadata: { adminId } }],
         { session }
@@ -410,6 +398,7 @@ async function requestWithdrawal(userId, amount) {
     throw new ApiError(400, 'INVALID_AMOUNT', `Withdrawal amount must be between ${min} and ${max} Birr.`);
   }
 
+  const referenceId = await nextReferenceId();
   const session = await mongoose.startSession();
   let transaction, adminRequest;
   try {
@@ -426,7 +415,6 @@ async function requestWithdrawal(userId, amount) {
       user.mainWalletBalance -= amount;
       await user.save({ session });
 
-      const referenceId = await nextReferenceId(session);
       const created = await Transaction.create(
         [{ userId, type: 'WITHDRAW', amount, referenceId, status: 'PENDING', description: 'Withdrawal pending admin approval' }],
         { session }
@@ -531,7 +519,7 @@ async function autoReleaseStaleWithdrawals() {
           await original.save({ session });
         }
 
-        const referenceId = await nextReferenceId(session);
+        const referenceId = await nextReferenceId();
         await Transaction.create(
           [{
             userId: adminRequest.userId,
