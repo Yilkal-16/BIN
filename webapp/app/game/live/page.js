@@ -68,7 +68,7 @@ function LiveContent() {
   }, [gameState.winners, gameState.status, gameId, router, navigatedAway]);
 
   const markedSet = useMemo(() => new Set(gameState.calledNumbers), [gameState.calledNumbers]);
-  const netPrizePool = gameState.grossPrizePool ? Math.floor(gameState.grossPrizePool * 0.8) : 0;
+  const netPrizePool = gameState.grossPrizePool ? Math.floor(gameState.grossPrizePool * 0.85) : 0;
   const isSpectator = cartelasLoaded && myCartelas.length === 0;
 
   // Manual mode: the player taps their own cells to daub them. Server-side
