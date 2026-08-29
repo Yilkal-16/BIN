@@ -14,7 +14,7 @@ const router = express.Router();
  * (registration itself only happens through the bot's contact-share flow,
  * §4.2), so this only issues a token — it never creates a user.
  */
-router.post('/telegram', rateLimit({ max: 30, windowSeconds: 3600 }), asyncHandler(async (req, res) => {
+router.post('/telegram', rateLimit({ max: 180, windowSeconds: 300 }), asyncHandler(async (req, res) => {
   const { initData } = req.body || {};
   if (!initData) return fail(res, 400, 'INVALID_AMOUNT', 'initData is required');
 
@@ -33,7 +33,7 @@ router.post('/telegram', rateLimit({ max: 30, windowSeconds: 3600 }), asyncHandl
 }));
 
 /** Thin REST wrapper around the same registration logic the bot uses (§8.2). */
-router.post('/register', rateLimit({ max: 10, windowSeconds: 3600 }), asyncHandler(async (req, res) => {
+router.post('/register', rateLimit({ max: 180, windowSeconds: 300 }), asyncHandler(async (req, res) => {
   const { telegramId, username, phone, displayName } = req.body || {};
   if (!telegramId || !phone) return fail(res, 400, 'INVALID_AMOUNT', 'telegramId and phone are required');
 
@@ -59,7 +59,7 @@ router.post('/register', rateLimit({ max: 10, windowSeconds: 3600 }), asyncHandl
  * possession check), rather than standing up a full SMS/OTP provider that
  * nothing else in the spec references.
  */
-router.post('/verify', rateLimit({ max: 20, windowSeconds: 3600 }), asyncHandler(async (req, res) => {
+router.post('/verify', rateLimit({ max: 180, windowSeconds: 300 }), asyncHandler(async (req, res) => {
   const { phone, code } = req.body || {};
   if (!phone || !code) return fail(res, 400, 'INVALID_AMOUNT', 'phone and code are required');
   const user = await User.findOne({ phone });

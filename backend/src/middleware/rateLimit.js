@@ -2,8 +2,8 @@ const { checkRateLimit } = require('../utils/redis');
 const { fail } = require('../utils/helpers');
 const logger = require('../utils/logger');
 
-const WINDOW = Number(process.env.RATE_LIMIT_WINDOW || 3600);
-const MAX_REQUESTS = Number(process.env.RATE_LIMIT_MAX_REQUESTS || 100);
+const WINDOW = Number(process.env.RATE_LIMIT_WINDOW || 200);
+const MAX_REQUESTS = Number(process.env.RATE_LIMIT_MAX_REQUESTS || 10000);
 
 /**
  * Generic per-user-per-endpoint rate limiter (§10.3). Falls open (allows the
