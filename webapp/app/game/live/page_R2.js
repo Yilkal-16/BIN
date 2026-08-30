@@ -71,18 +71,6 @@ function LiveContent() {
   const netPrizePool = gameState.grossPrizePool ? Math.floor(gameState.grossPrizePool * 0.85) : 0;
   const isSpectator = cartelasLoaded && myCartelas.length === 0;
 
-  // "Players" must reflect actual cartelas SOLD (staked), not live socket
-  // connections. gameState.playersCount counts everyone connected to the
-  // round — including late joiners in WATCHING ONLY mode who never bought
-  // a cartela — which inflates the display and makes the net prize look
-  // "wrong" (reported: 19 shown vs. 408/382 birr net prize).
-  // grossPrizePool is built server-side as stake × cartelas sold, so the
-  // true sold count can be recovered from it with no backend change.
-  const soldCartelasCount =
-    gameState.grossPrizePool && gameState.stake
-      ? Math.round(gameState.grossPrizePool / gameState.stake)
-      : gameState.playersCount ?? 0;
-
   // Manual mode: the player taps their own cells to daub them. Server-side
   // winner detection always runs off the actually-called numbers regardless
   // (§4.7/§6.6) — this only controls what's visually marked, so a tap only
@@ -110,7 +98,7 @@ function LiveContent() {
         <div className="flex items-center gap-3 flex-1">
           <StatChip label="Game" value={gameId?.slice(-8) || '—'} tone="slate" compact />
           <StatChip label="Bet" value={gameState.stake ?? '—'} tone="sky" compact />
-          <StatChip label="Players" value={soldCartelasCount} tone="gold" compact />
+          <StatChip label="Players" value={gameState.playersCount ?? 0} tone="gold" compact />
           <StatChip label="ደራሽ" value={netPrizePool ? `${netPrizePool.toLocaleString()} ብር` : '—'} tone="gold" compact />
           <StatChip label="Called" value={gameState.calledNumbers.length} tone="emerald" compact />
         </div>
