@@ -98,9 +98,12 @@ function LiveContent() {
         <div className="flex items-center gap-3 flex-1">
           <StatChip label="Game" value={gameId?.slice(-8) || '—'} tone="slate" compact />
           <StatChip label="Bet" value={gameState.stake ?? '—'} tone="sky" compact />
-          <StatChip label="Players" value={gameState.playersCount ?? 0} tone="gold" compact />
           <StatChip label="ደራሽ" value={netPrizePool ? `${netPrizePool.toLocaleString()} ብር` : '—'} tone="gold" compact />
           <StatChip label="Called" value={gameState.calledNumbers.length} tone="emerald" compact />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="text-emerald-400 text-[10px] font-bold tracking-wide uppercase">Live</span>
         </div>
       </header>
 
