@@ -269,7 +269,7 @@ function depositFailureMessage(reason) {
       `❌ *This transaction has already been used for a previous deposit.*\n` +
       `Each Telebirr confirmation can only be used once. An admin will review this manually.`,
     WITHINTIMEWINDOW:
-      `⏳ *This confirmation is too old to auto-verify* (must be within 10 minutes of the transaction).\n` +
+      `⏳ *This confirmation is too old to auto-verify* (must be within 45 minutes of the transaction).\n` +
       `An admin will review this manually.`
   };
   return (

@@ -195,7 +195,7 @@ async function submitDeposit(userId, amount, rawProof) {
   await transaction.save();
 
   // Run the 6 SMS checks (amount, recipient name, recipient phone,
-  // transaction ID format, transaction ID not reused, within 45 minutes).
+  // transaction ID format, transaction ID not reused, within 10 minutes).
   let verifyResult = { verified: false, reason: 'ERROR', checks: null };
   try {
     verifyResult = await verifyDepositDetailed({ amount, rawProof, currentTransactionId: transaction._id });

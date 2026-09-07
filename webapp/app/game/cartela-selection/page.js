@@ -7,8 +7,8 @@ import { useWebSocket } from '../../../hooks/useWebSocket';
 import { api, STAKES } from '../../../lib/api';
 import { hapticFeedback, notifyHaptic } from '../../../lib/telegram';
 
-const MAX_SELECTABLE = 3;
-const TOTAL_CARTELAS = 120;
+const MAX_SELECTABLE = 6;
+const TOTAL_CARTELAS = 240;
 
 // B/I/N/G/O accent colors — shared "brand" for the whole game flow so the
 // selection grid and the live board read as the same product.
