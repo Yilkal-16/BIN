@@ -380,10 +380,6 @@ async function declineDeposit(adminRequestId, adminId, reason) {
 /** Admin manually credits a user's wallet, funded from the House Wallet (§7.2). */
 async function adminCredit(targetUserId, amount, adminId, description = 'Manual admin credit') {
   if (!(amount > 0)) throw new ApiError(400, 'INVALID_AMOUNT', 'Credit amount must be positive');
-  const maxCredit = Number(process.env.ADMIN_CREDIT_MAX_AMOUNT || 2000);
-  if (amount > maxCredit) {
-    throw new ApiError(400, 'INVALID_AMOUNT', `Credit amount cannot exceed ${maxCredit} Birr`);
-  }
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {

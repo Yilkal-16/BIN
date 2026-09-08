@@ -537,17 +537,13 @@ async function handleAdminCreditAmount(ctx, text) {
 
   if (!Number.isFinite(amount) || amount <= 0) return ctx.reply('Invalid amount.');
 
-  try {
-    const { newBalance } = await walletService.adminCredit(state.data.targetUserId, amount, admin._id, 'Manual admin credit');
-    const target = await User.findById(state.data.targetUserId);
-    await ctx.reply(`✅ Credited ${amount} Birr to ${target.displayName}. New balance: ${newBalance} Birr.`);
-    await notificationService.notifyTelegram(
-      target.telegramId,
-      `💰 Your wallet has been credited with ${amount} Birr by an admin.\nNew balance: ${newBalance} Birr`
-    );
-  } catch (err) {
-    await ctx.reply(`⚠️ ${err.message}`);
-  }
+  const { newBalance } = await walletService.adminCredit(state.data.targetUserId, amount, admin._id, 'Manual admin credit');
+  const target = await User.findById(state.data.targetUserId);
+  await ctx.reply(`✅ Credited ${amount} Birr to ${target.displayName}. New balance: ${newBalance} Birr.`);
+  await notificationService.notifyTelegram(
+    target.telegramId,
+    `💰 Your wallet has been credited with ${amount} Birr by an admin.\nNew balance: ${newBalance} Birr`
+  );
 }
 
 // ---------------------------------------------------------------------------
