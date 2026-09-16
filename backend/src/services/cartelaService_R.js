@@ -147,11 +147,7 @@ async function purchaseCartelas(gameId, userId, cartelaIds) {
         user.mainWalletBalance -= totalCost;
         await user.save({ session });
 
-        // Pass `session` so the reference-id counter increments atomically
-        // with this transaction (commits/rolls back together) instead of as
-        // an independent side effect that could outlive a retried/aborted
-        // purchase attempt.
-        const referenceId = await walletService.nextReferenceId(session);
+        const referenceId = await walletService.nextReferenceId();
         await Transaction.create(
           [{
             userId,
@@ -166,34 +162,8 @@ async function purchaseCartelas(gameId, userId, cartelaIds) {
           { session }
         );
 
-        // ROOT CAUSE FIX (prize pool race condition): `game` was read into
-        // memory once, *before* this transaction even started (see the
-        // `Game.findOne({ gameId })` above, outside `session.withTransaction`).
-        // The old code did `game.grossPrizePool = (game.grossPrizePool||0) + totalCost`
-        // on that stale in-memory copy and then `game.save({session})`, which
-        // persists an absolute value derived from a value that may already be
-        // out of date. When two players purchase cartelas around the same
-        // moment (routine during the 45s WAITING window with multiple
-        // players), both requests read the same starting grossPrizePool,
-        // both compute "old + their own cost", and whichever save() commits
-        // last silently overwrites the other's contribution — a classic
-        // lost-update. This under-counts the real money collected for the
-        // round, so settleGame() later computes commission/netPrizePool off
-        // a grossPrizePool that's smaller than stake x real players, and
-        // winners are paid less than they should be. It reproduces
-        // intermittently (matches "sometimes erroneous") because it only
-        // triggers when purchases overlap in time.
-        //
-        // Fix: never read-modify-write a shared counter across a network
-        // round trip. Use MongoDB's atomic $inc directly, in the same
-        // session/transaction as the wallet debit and transaction record,
-        // so the increment always applies against the row's current
-        // database value regardless of concurrent purchases.
-        await Game.updateOne(
-          { gameId },
-          { $inc: { grossPrizePool: totalCost } },
-          { session }
-        );
+        game.grossPrizePool = (game.grossPrizePool || 0) + totalCost;
+        await game.save({ session });
       }
     });
   } finally {
