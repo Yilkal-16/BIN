@@ -71,6 +71,18 @@ function LiveContent() {
   const netPrizePool = gameState.grossPrizePool ? Math.floor(gameState.grossPrizePool * 0.85) : 0;
   const isSpectator = cartelasLoaded && myCartelas.length === 0;
 
+  // "Players" must reflect actual cartelas SOLD (staked), not live socket
+  // connections. gameState.playersCount counts everyone connected to the
+  // round — including late joiners in WATCHING ONLY mode who never bought
+  // a cartela — which inflates the display and makes the net prize look
+  // "wrong" (reported: 19 shown vs. 408/382 birr net prize).
+  // grossPrizePool is built server-side as stake × cartelas sold, so the
+  // true sold count can be recovered from it with no backend change.
+  const soldCartelasCount =
+    gameState.grossPrizePool && gameState.stake
+      ? Math.round(gameState.grossPrizePool / gameState.stake)
+      : gameState.playersCount ?? 0;
+
   // Manual mode: the player taps their own cells to daub them. Server-side
   // winner detection always runs off the actually-called numbers regardless
   // (§4.7/§6.6) — this only controls what's visually marked, so a tap only
@@ -98,7 +110,7 @@ function LiveContent() {
         <div className="flex items-center gap-3 flex-1">
           <StatChip label="Game" value={gameId?.slice(-8) || '—'} tone="slate" compact />
           <StatChip label="Bet" value={gameState.stake ?? '—'} tone="sky" compact />
-          <StatChip label="Players" value={gameState.playersCount ?? 0} tone="gold" compact />
+          <StatChip label="Players" value={soldCartelasCount} tone="gold" compact />
           <StatChip label="ደራሽ" value={netPrizePool ? `${netPrizePool.toLocaleString()} ብር` : '—'} tone="gold" compact />
           <StatChip label="Called" value={gameState.calledNumbers.length} tone="emerald" compact />
         </div>
@@ -290,16 +302,22 @@ function CallerBoard({ calledNumbers, lastCalled }) {
 // Only" pattern from Beteseb Bingo — instead of being locked out entirely.
 function NoCartelasBoughtPlaceholder() {
   return (
-    <div className="h-full flex flex-col items-center justify-center text-center px-3 py-8 bg-[#1A1D24] rounded-xl border border-[#2A2F3A]">
+    <div className="h-full flex flex-col items-center justify-center text-center px-4 py-8 bg-gradient-to-b from-[#1A1D24] to-[#20242E] rounded-xl border border-amber-500/20">
       <div className="w-14 h-14 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-2xl mb-3">
-        🎟️
+        🎰
       </div>
-      <p className="text-ivory font-bold text-sm mb-2">WATCHING ONLY</p>
-      <p className="text-mute text-xs leading-relaxed">
-        You can still watch this round live.
-        <br />
-        A new round starts automatically when it ends.
+      <p className="text-amber-300 font-extrabold text-sm mb-2 tracking-wide">
+        የቢንጎ ማጫወቻ አፕሊኬሽን መግዛት ከፈለጋችሁ፤
       </p>
+      <p className="text-ivory text-xs leading-relaxed max-w-[220px]">
+        በዚህ ቁጥር ደውሉ፤ በተመጣጣኝ ዋጋና በፍጥነት ሰርተን እናስረክባለን።
+      </p>
+      <a
+        href="tel:0956404141"
+        className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-amber-400 text-[#111] font-extrabold text-sm shadow-lg shadow-amber-400/20 active:scale-95 transition-transform"
+      >
+        📞 0956404141
+      </a>
     </div>
   );
 }
