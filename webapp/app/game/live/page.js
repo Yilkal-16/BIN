@@ -303,18 +303,9 @@ function NoCartelasBoughtPlaceholder() {
         🎰
       </div>
       <p className="text-amber-300 font-extrabold text-sm mb-2 tracking-wide">
-        የቢንጎ ማጫወቻ አፕሊኬሽን መግዛት ከፈለጋችሁ፤
+        ይሄ ዙር ጠርቶ እስኪጨርስ ጠብቁ፤ ክዛ ራሱ ቀጣይ ዙር ይጀምራል።
       </p>
-      <p className="text-ivory text-xs leading-relaxed max-w-[220px]">
-        በዚህ ቁጥር ደውሉ፤ በተመጣጣኝ ዋጋና በፍጥነት ሰርተን እናስረክባለን።
-      </p>
-      <a
-        href="tel:0956404141"
-        className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-amber-400 text-[#111] font-extrabold text-sm shadow-lg shadow-amber-400/20 active:scale-95 transition-transform"
-      >
-        📞 0956404141
-      </a>
-    </div>
+      </div>
   );
 }
 
