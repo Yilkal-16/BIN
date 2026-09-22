@@ -274,8 +274,8 @@ function SelectionContent() {
                       isSelected
                         ? 'bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white font-bold scale-105 shadow-lg shadow-violet-500/40 ring-2 ring-white/40'
                         : isTaken
-                        ? 'bg-violet-500/10 border border-violet-400/30 text-line cursor-not-allowed'
-                        : 'bg-violet-500/10 border border-violet-400/30 text-ivory active:bg-line'
+                        ? 'bg-surface text-line cursor-not-allowed'
+                        : 'bg-surface2 text-ivory active:bg-line'
                     ].join(' ')}
                   >
                     {id}
@@ -298,7 +298,7 @@ function SelectionContent() {
             <button
               onClick={handleBuy}
               disabled={selected.length === 0 || busy || !canAfford}
-              className="w-full bg-gradient-to-r from-violet-600 to-fuchsia-600 disabled:bg-violet-500/10 disabled:bg-none disabled:border disabled:border-violet-400/30 disabled:text-mute text-white font-display font-bold text-base py-4 rounded-card active:scale-[0.98] transition-transform shadow-lg shadow-violet-500/30 ring-1 ring-white/20 disabled:ring-0 disabled:shadow-none"
+              className="w-full bg-gradient-to-r from-violet-600 to-fuchsia-600 disabled:bg-line disabled:bg-none disabled:text-mute text-white font-display font-bold text-base py-4 rounded-card active:scale-[0.98] transition-transform shadow-lg shadow-violet-500/30 ring-1 ring-white/20 disabled:ring-0 disabled:shadow-none"
             >
               {!canAfford && selected.length > 0 ? 'Insufficient balance' : busy ? 'Confirming…' : 'Buy Cartela(s)'}
             </button>

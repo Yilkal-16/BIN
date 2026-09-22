@@ -8,7 +8,7 @@ import { api, STAKES } from '../../../lib/api';
 import { hapticFeedback, notifyHaptic } from '../../../lib/telegram';
 
 const MAX_SELECTABLE = 6;
-const TOTAL_CARTELAS = 200;
+const TOTAL_CARTELAS = 240;
 
 // B/I/N/G/O accent colors — shared "brand" for the whole game flow so the
 // selection grid and the live board read as the same product.
@@ -95,8 +95,8 @@ function SelectionContent() {
   useEffect(() => {
     if (!gameId || status === 'WAITING' || purchasedRef.current || busy) return;
     purchasedRef.current = true;
-    router.replace(`/game/live?gameId=${gameId}&stake=${stake}`);
-  }, [gameId, status, router, busy, stake]);
+    router.replace(`/game/live?gameId=${gameId}`);
+  }, [gameId, status, router, busy]);
 
   useEffect(() => {
     if (!socket || !connected || !gameId) return undefined;
@@ -142,10 +142,10 @@ function SelectionContent() {
     };
   }, [socket, connected, gameId, router, loadAvailability]);
 
-  // The server pushes a fresh countdown_update every second, so this local
-  // interval is a resilience fallback (kept ticking during a brief dropped
-  // message or reconnect) rather than the primary source — each incoming
-  // socket payload still resyncs the value so drift never builds up.
+  // The server only pushes a fresh countdown_update every few seconds, so
+  // relying on that alone makes the on-screen number jump instead of
+  // ticking down. Run a local one-second interval between updates, and let
+  // each incoming socket payload resync the value so drift never builds up.
   useEffect(() => {
     if (countdown == null || status !== 'WAITING') return undefined;
     const t = setInterval(() => setCountdown((c) => (c == null ? c : Math.max(0, c - 1))), 1000);
@@ -181,7 +181,7 @@ function SelectionContent() {
       purchasedRef.current = true;
       notifyHaptic('success');
       await refreshProfile();
-      router.push(`/game/live?gameId=${gameId}&stake=${stake}`);
+      router.push(`/game/live?gameId=${gameId}`);
     } catch (err) {
       // If a purchase already succeeded (e.g. this was a stray duplicate
       // request settling late), the error is stale — the player already
@@ -223,7 +223,7 @@ function SelectionContent() {
           className="absolute left-0 right-0 bottom-0 h-px"
           style={{ backgroundImage: 'linear-gradient(90deg, transparent, rgba(99,102,241,0.5), transparent)' }}
         />
-        <button onClick={() => router.push(`/game/lobby?stake=${stake}`)} className="text-mute text-sm active:opacity-60">
+        <button onClick={() => router.push('/game/lobby')} className="text-mute text-sm active:opacity-60">
           ← Back
         </button>
         <div className="text-center">
@@ -270,12 +270,12 @@ function SelectionContent() {
                     disabled={isTaken || purchasedRef.current}
                     onClick={() => toggleCartela(id)}
                     className={[
-                      'aspect-square rounded-chip text-sm font-mono font-bold flex items-center justify-center transition-all',
+                      'aspect-square rounded-chip text-xs font-mono font-semibold flex items-center justify-center transition-all',
                       isSelected
                         ? 'bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white font-bold scale-105 shadow-lg shadow-violet-500/40 ring-2 ring-white/40'
                         : isTaken
-                        ? 'bg-violet-500/10 border border-violet-400/30 text-line cursor-not-allowed'
-                        : 'bg-violet-500/10 border border-violet-400/30 text-ivory active:bg-line'
+                        ? 'bg-surface text-line cursor-not-allowed'
+                        : 'bg-surface2 text-ivory active:bg-line'
                     ].join(' ')}
                   >
                     {id}
@@ -298,7 +298,7 @@ function SelectionContent() {
             <button
               onClick={handleBuy}
               disabled={selected.length === 0 || busy || !canAfford}
-              className="w-full bg-gradient-to-r from-violet-600 to-fuchsia-600 disabled:bg-violet-500/10 disabled:bg-none disabled:border disabled:border-violet-400/30 disabled:text-mute text-white font-display font-bold text-base py-4 rounded-card active:scale-[0.98] transition-transform shadow-lg shadow-violet-500/30 ring-1 ring-white/20 disabled:ring-0 disabled:shadow-none"
+              className="w-full bg-gradient-to-r from-violet-600 to-fuchsia-600 disabled:bg-line disabled:bg-none disabled:text-mute text-white font-display font-bold text-base py-4 rounded-card active:scale-[0.98] transition-transform shadow-lg shadow-violet-500/30 ring-1 ring-white/20 disabled:ring-0 disabled:shadow-none"
             >
               {!canAfford && selected.length > 0 ? 'Insufficient balance' : busy ? 'Confirming…' : 'Buy Cartela(s)'}
             </button>
