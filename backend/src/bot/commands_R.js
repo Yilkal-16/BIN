@@ -269,7 +269,7 @@ function depositFailureMessage(reason) {
       `❌ *This transaction has already been used for a previous deposit.*\n` +
       `Each Telebirr confirmation can only be used once. An admin will review this manually.`,
     WITHINTIMEWINDOW:
-      `⏳ *This confirmation is too old to auto-verify* (must be within 45 minutes of the transaction).\n` +
+      `⏳ *This confirmation is too old to auto-verify* (must be within 10 minutes of the transaction).\n` +
       `An admin will review this manually.`
   };
   return (
@@ -537,13 +537,17 @@ async function handleAdminCreditAmount(ctx, text) {
 
   if (!Number.isFinite(amount) || amount <= 0) return ctx.reply('Invalid amount.');
 
-  const { newBalance } = await walletService.adminCredit(state.data.targetUserId, amount, admin._id, 'Manual admin credit');
-  const target = await User.findById(state.data.targetUserId);
-  await ctx.reply(`✅ Credited ${amount} Birr to ${target.displayName}. New balance: ${newBalance} Birr.`);
-  await notificationService.notifyTelegram(
-    target.telegramId,
-    `💰 Your wallet has been credited with ${amount} Birr by an admin.\nNew balance: ${newBalance} Birr`
-  );
+  try {
+    const { newBalance } = await walletService.adminCredit(state.data.targetUserId, amount, admin._id, 'Manual admin credit');
+    const target = await User.findById(state.data.targetUserId);
+    await ctx.reply(`✅ Credited ${amount} Birr to ${target.displayName}. New balance: ${newBalance} Birr.`);
+    await notificationService.notifyTelegram(
+      target.telegramId,
+      `💰 Your wallet has been credited with ${amount} Birr by an admin.\nNew balance: ${newBalance} Birr`
+    );
+  } catch (err) {
+    await ctx.reply(`⚠️ ${err.message}`);
+  }
 }
 
 // ---------------------------------------------------------------------------

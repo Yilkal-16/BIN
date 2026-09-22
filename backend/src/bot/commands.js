@@ -1,7 +1,9 @@
-const { User, UserState, AdminRequest, Transaction, HouseWallet } = require('../models');
+const { User, UserState, AdminRequest, Transaction, HouseWallet, Game } = require('../models');
 const walletService = require('../services/walletService');
 const notificationService = require('../services/notificationService');
+const reportingService = require('../services/reportingService');
 const { redis, recordAdminPinAttempt, isAdminLockedOut } = require('../utils/redis');
+const { STAKES } = require('../utils/helpers');
 const logger = require('../utils/logger');
 const kb = require('./keyboards');
 
@@ -13,6 +15,10 @@ const DEPOSIT_MAX = Number(process.env.DEPOSIT_MAX_AMOUNT || 50000);
 const WITHDRAW_MIN = Number(process.env.WITHDRAW_MIN_AMOUNT || 50);
 const WITHDRAW_MAX = Number(process.env.WITHDRAW_MAX_AMOUNT || 15000);
 const VERIFY_TIMEOUT_MS = Number(process.env.TELEBIRR_VERIFICATION_TIMEOUT || 120) * 1000;
+// Items per page for the paginated admin lists (Pending Deposits / Pending
+// Withdrawals) — each item is its own Telegram message (with its own
+// approve/decline buttons), so this is kept small to avoid flooding the chat.
+const ADMIN_PAGE_SIZE = 5;
 
 async function getUser(telegramId) {
   return User.findOne({ telegramId: String(telegramId) });
@@ -269,7 +275,7 @@ function depositFailureMessage(reason) {
       `❌ *This transaction has already been used for a previous deposit.*\n` +
       `Each Telebirr confirmation can only be used once. An admin will review this manually.`,
     WITHINTIMEWINDOW:
-      `⏳ *This confirmation is too old to auto-verify* (must be within 10 minutes of the transaction).\n` +
+      `⏳ *This confirmation is too old to auto-verify* (must be within 45 minutes of the transaction).\n` +
       `An admin will review this manually.`
   };
   return (
@@ -379,25 +385,29 @@ async function handleAdminPanel(ctx) {
   await ctx.reply('🛠️ *Admin Panel*', { parse_mode: 'Markdown', ...kb.adminPanelKeyboard() });
 }
 
-async function handleAdminDeposits(ctx) {
-  const admin = await requireAdminSession(ctx);
-  if (!admin) return;
-  await ctx.answerCbQuery();
-  // Deposits never sit at PENDING (see walletService.submitDeposit) —
-  // MANUAL_REVIEW needs an APPROVE/DECLINE, APPROVED is open/reversible
-  // until an admin explicitly REVERSEs or FINALIZEs it (no time limit).
-  // Queried separately because they need different sort orders: MANUAL_REVIEW
-  // is FIFO oldest-first (actively waiting on a decision), APPROVED is
-  // newest-first (no auto-expiry, so an unbounded backlog of older
-  // already-approved deposits would otherwise bury freshly-approved ones).
-  const [needsReview, recentlyApproved] = await Promise.all([
-    AdminRequest.find({ type: 'DEPOSIT', status: 'MANUAL_REVIEW' }).populate('userId').sort({ createdAt: 1 }).limit(10),
-    AdminRequest.find({ type: 'DEPOSIT', status: 'APPROVED' }).populate('userId').sort({ createdAt: -1 }).limit(10)
-  ]);
+// Deposits never sit at PENDING (see walletService.submitDeposit) —
+// MANUAL_REVIEW needs an APPROVE/DECLINE, APPROVED is open/reversible until
+// an admin explicitly REVERSEs or FINALIZEs it (no time limit). The two
+// sections are paginated independently (each with its own Prev/Next row)
+// because they use different sort orders: MANUAL_REVIEW is FIFO
+// oldest-first (actively waiting on a decision), APPROVED is newest-first
+// (no auto-expiry, so an unbounded backlog of older already-approved
+// deposits would otherwise bury freshly-approved ones under a fixed page).
+async function sendDepositsReviewPage(ctx, page) {
+  const total = await AdminRequest.countDocuments({ type: 'DEPOSIT', status: 'MANUAL_REVIEW' });
+  const totalPages = Math.max(1, Math.ceil(total / ADMIN_PAGE_SIZE));
+  page = Math.min(Math.max(1, page), totalPages);
 
-  if (needsReview.length === 0 && recentlyApproved.length === 0) {
-    return ctx.reply('No deposits awaiting action.');
+  if (total === 0) {
+    await ctx.reply('🔍 Needs review: none.');
+    return;
   }
+
+  const needsReview = await AdminRequest.find({ type: 'DEPOSIT', status: 'MANUAL_REVIEW' })
+    .populate('userId')
+    .sort({ createdAt: 1 })
+    .skip((page - 1) * ADMIN_PAGE_SIZE)
+    .limit(ADMIN_PAGE_SIZE);
 
   for (const req of needsReview) {
     await ctx.reply(
@@ -405,26 +415,102 @@ async function handleAdminDeposits(ctx) {
       kb.depositActionKeyboard(req.status, req._id.toString())
     );
   }
+  await ctx.reply(`🔍 Needs review — page ${page}/${totalPages} (${total} total)`, kb.paginationKeyboard('admin_dep_review_page', page, totalPages));
+}
+
+async function sendDepositsApprovedPage(ctx, page) {
+  const total = await AdminRequest.countDocuments({ type: 'DEPOSIT', status: 'APPROVED' });
+  const totalPages = Math.max(1, Math.ceil(total / ADMIN_PAGE_SIZE));
+  page = Math.min(Math.max(1, page), totalPages);
+
+  if (total === 0) {
+    await ctx.reply('✅ Auto-approved (reversible): none.');
+    return;
+  }
+
+  const recentlyApproved = await AdminRequest.find({ type: 'DEPOSIT', status: 'APPROVED' })
+    .populate('userId')
+    .sort({ createdAt: -1 })
+    .skip((page - 1) * ADMIN_PAGE_SIZE)
+    .limit(ADMIN_PAGE_SIZE);
+
   for (const req of recentlyApproved) {
     await ctx.reply(
       `✅ Auto-approved (reversible until you Finalize it)\nDeposit: ${req.amount} Birr from ${req.userId.displayName} (${req.userId.phone})\nProof: ${req.proof}`,
       kb.depositActionKeyboard(req.status, req._id.toString())
     );
   }
+  await ctx.reply(`✅ Auto-approved — page ${page}/${totalPages} (${total} total)`, kb.paginationKeyboard('admin_dep_approved_page', page, totalPages));
 }
 
-async function handleAdminWithdrawals(ctx) {
+async function handleAdminDeposits(ctx) {
   const admin = await requireAdminSession(ctx);
   if (!admin) return;
   await ctx.answerCbQuery();
-  const pending = await AdminRequest.find({ type: 'WITHDRAW', status: 'PENDING' }).populate('userId').limit(10);
-  if (pending.length === 0) return ctx.reply('No pending withdrawal requests.');
+  const [reviewCount, approvedCount] = await Promise.all([
+    AdminRequest.countDocuments({ type: 'DEPOSIT', status: 'MANUAL_REVIEW' }),
+    AdminRequest.countDocuments({ type: 'DEPOSIT', status: 'APPROVED' })
+  ]);
+  if (reviewCount === 0 && approvedCount === 0) {
+    return ctx.reply('No deposits awaiting action.');
+  }
+  await sendDepositsReviewPage(ctx, 1);
+  await sendDepositsApprovedPage(ctx, 1);
+}
+
+// Prev/Next taps on the "Needs review" section only re-send that section,
+// so paging doesn't re-flood the chat with the (unrelated) Approved list.
+async function handleAdminDepositsReviewPage(ctx, page) {
+  const admin = await requireAdminSession(ctx);
+  if (!admin) return;
+  await ctx.answerCbQuery();
+  await sendDepositsReviewPage(ctx, Number(page));
+}
+
+async function handleAdminDepositsApprovedPage(ctx, page) {
+  const admin = await requireAdminSession(ctx);
+  if (!admin) return;
+  await ctx.answerCbQuery();
+  await sendDepositsApprovedPage(ctx, Number(page));
+}
+
+async function sendWithdrawalsPage(ctx, page) {
+  const total = await AdminRequest.countDocuments({ type: 'WITHDRAW', status: 'PENDING' });
+  const totalPages = Math.max(1, Math.ceil(total / ADMIN_PAGE_SIZE));
+  page = Math.min(Math.max(1, page), totalPages);
+
+  if (total === 0) {
+    await ctx.reply('No pending withdrawal requests.');
+    return;
+  }
+
+  const pending = await AdminRequest.find({ type: 'WITHDRAW', status: 'PENDING' })
+    .populate('userId')
+    .sort({ createdAt: 1 })
+    .skip((page - 1) * ADMIN_PAGE_SIZE)
+    .limit(ADMIN_PAGE_SIZE);
+
   for (const req of pending) {
     await ctx.reply(
       `Withdrawal: ${req.amount} Birr for ${req.userId.displayName} (${req.userId.phone})`,
       kb.approveDeclineKeyboard('wd', req._id.toString())
     );
   }
+  await ctx.reply(`Pending withdrawals — page ${page}/${totalPages} (${total} total)`, kb.paginationKeyboard('admin_wd_page', page, totalPages));
+}
+
+async function handleAdminWithdrawals(ctx) {
+  const admin = await requireAdminSession(ctx);
+  if (!admin) return;
+  await ctx.answerCbQuery();
+  await sendWithdrawalsPage(ctx, 1);
+}
+
+async function handleAdminWithdrawalsPage(ctx, page) {
+  const admin = await requireAdminSession(ctx);
+  if (!admin) return;
+  await ctx.answerCbQuery();
+  await sendWithdrawalsPage(ctx, Number(page));
 }
 
 async function handleAdminDashboard(ctx) {
@@ -444,6 +530,114 @@ async function handleAdminDashboard(ctx) {
       `Pending Withdrawals: ${pendingWithdrawals}\nTotal Players: ${totalUsers}`,
     { parse_mode: 'Markdown' }
   );
+}
+
+// "TRANSACTION" tab — daily/weekly/monthly/total summary of registered
+// users, games played per stake, finalized deposits, and approved
+// withdrawals (see reportingService for the exact bucketing rules).
+async function handleAdminTransactions(ctx) {
+  const admin = await requireAdminSession(ctx);
+  if (!admin) return;
+  await ctx.answerCbQuery();
+
+  const summary = await reportingService.getTransactionSummary();
+  const periodLabels = [
+    ['daily', '📅 Daily'],
+    ['weekly', '🗓️ Weekly'],
+    ['monthly', '📆 Monthly'],
+    ['total', '🕓 All-time']
+  ];
+
+  const lines = ['📊 *TRANSACTION SUMMARY*'];
+  for (const [key, label] of periodLabels) {
+    const gamesByStake = summary.gamesByStake[key];
+    const gamesLine = STAKES.map((s) => `${s}: ${gamesByStake[s]}`).join(', ');
+    const totalGames = STAKES.reduce((sum, s) => sum + gamesByStake[s], 0);
+    const deposits = summary.deposits[key];
+    const withdrawals = summary.withdrawals[key];
+
+    lines.push(
+      `\n*${label}*`,
+      `👤 Registered Users: ${summary.users[key]}`,
+      `🎮 Games Played (${totalGames} total) — by stake: ${gamesLine}`,
+      `💵 Deposits (finalized): ${deposits.count} — ${deposits.total} Birr`,
+      `💸 Withdrawals (approved): ${withdrawals.count} — ${withdrawals.total} Birr`
+    );
+  }
+
+  await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });
+}
+
+// "WINNERS" tab — winner(s) of every completed game: game ID, stake, net
+// prize, date/time played, and each winner's phone (+ name, when available).
+// Paginated like the deposits/withdrawals lists, newest game first.
+
+/** e.g. "Sep 12, 2026, 3:45 PM" — server-local clock, same convention used everywhere else in this file. */
+function formatGameDateTime(game) {
+  const when = game.endTime || game.startTime;
+  if (!when) return 'unknown time';
+  return new Date(when).toLocaleString('en-US', {
+    year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+  });
+}
+
+async function sendWinnersPage(ctx, page) {
+  const total = await Game.countDocuments({ status: 'COMPLETED' });
+  const totalPages = Math.max(1, Math.ceil(total / ADMIN_PAGE_SIZE));
+  page = Math.min(Math.max(1, page), totalPages);
+
+  if (total === 0) {
+    await ctx.reply('🏆 No completed games yet.');
+    return;
+  }
+
+  const games = await Game.find({ status: 'COMPLETED' })
+    .sort({ endTime: -1 })
+    .skip((page - 1) * ADMIN_PAGE_SIZE)
+    .limit(ADMIN_PAGE_SIZE);
+
+  // Game.winners only stores ownerId (+ a displayName snapshot), not phone —
+  // batch-fetch every real (non-house) winner's phone in one query rather
+  // than one lookup per winner.
+  const ownerIds = [...new Set(
+    games.flatMap((g) => g.winners.map((w) => w.ownerId)).filter((id) => id !== 'system-admin')
+  )];
+  const users = ownerIds.length ? await User.find({ _id: { $in: ownerIds } }).select('phone') : [];
+  const phoneById = new Map(users.map((u) => [u._id.toString(), u.phone]));
+
+  const blocks = games.map((g) => {
+    const header = `🎮 *${g.gameId}* | Stake: ${g.stake} Birr | Net Prize: ${g.noWinner ? 0 : g.prizePool} Birr | ${formatGameDateTime(g)}`;
+    if (g.noWinner || g.winners.length === 0) {
+      return `${header}\n   ↳ No winner — pool rolled over`;
+    }
+    const winnerLines = g.winners.map((w) => {
+      if (w.ownerId === 'system-admin') {
+        return `   🏆 House (admin cartela #${w.cartelaId})`;
+      }
+      const phone = phoneById.get(w.ownerId) || 'unknown';
+      const name = w.displayName ? ` — ${w.displayName}` : '';
+      return `   🏆 ${phone}${name} — cartela #${w.cartelaId}`;
+    });
+    return `${header}\n${winnerLines.join('\n')}`;
+  });
+
+  await ctx.reply(blocks.join('\n\n'), { parse_mode: 'Markdown' });
+  await ctx.reply(`Page ${page}/${totalPages} (${total} completed games)`, kb.paginationKeyboard('admin_winners_page', page, totalPages));
+}
+
+
+async function handleAdminWinners(ctx) {
+  const admin = await requireAdminSession(ctx);
+  if (!admin) return;
+  await ctx.answerCbQuery();
+  await sendWinnersPage(ctx, 1);
+}
+
+async function handleAdminWinnersPage(ctx, page) {
+  const admin = await requireAdminSession(ctx);
+  if (!admin) return;
+  await ctx.answerCbQuery();
+  await sendWinnersPage(ctx, Number(page));
 }
 
 async function handleDepositDecision(ctx, action, id) {
@@ -537,17 +731,13 @@ async function handleAdminCreditAmount(ctx, text) {
 
   if (!Number.isFinite(amount) || amount <= 0) return ctx.reply('Invalid amount.');
 
-  try {
-    const { newBalance } = await walletService.adminCredit(state.data.targetUserId, amount, admin._id, 'Manual admin credit');
-    const target = await User.findById(state.data.targetUserId);
-    await ctx.reply(`✅ Credited ${amount} Birr to ${target.displayName}. New balance: ${newBalance} Birr.`);
-    await notificationService.notifyTelegram(
-      target.telegramId,
-      `💰 Your wallet has been credited with ${amount} Birr by an admin.\nNew balance: ${newBalance} Birr`
-    );
-  } catch (err) {
-    await ctx.reply(`⚠️ ${err.message}`);
-  }
+  const { newBalance } = await walletService.adminCredit(state.data.targetUserId, amount, admin._id, 'Manual admin credit');
+  const target = await User.findById(state.data.targetUserId);
+  await ctx.reply(`✅ Credited ${amount} Birr to ${target.displayName}. New balance: ${newBalance} Birr.`);
+  await notificationService.notifyTelegram(
+    target.telegramId,
+    `💰 Your wallet has been credited with ${amount} Birr by an admin.\nNew balance: ${newBalance} Birr`
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -612,8 +802,14 @@ module.exports = {
   handleInfo,
   handleAdminPanel,
   handleAdminDeposits,
+  handleAdminDepositsReviewPage,
+  handleAdminDepositsApprovedPage,
   handleAdminWithdrawals,
+  handleAdminWithdrawalsPage,
   handleAdminDashboard,
+  handleAdminTransactions,
+  handleAdminWinners,
+  handleAdminWinnersPage,
   handleDepositDecision,
   handleWithdrawDecision,
   handleAdminCreditButton,
