@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import AuthGate from '../../../components/AuthGate';
 import { useWebSocket } from '../../../hooks/useWebSocket';
@@ -41,7 +41,6 @@ function LiveContent() {
   const [myCartelas, setMyCartelas] = useState([]);
   const [cartelasLoaded, setCartelasLoaded] = useState(false);
   const [autoMode, setAutoMode] = useState(true);
-  const [soundMuted, setSoundMuted] = useState(false);
   const [manualMarks, setManualMarks] = useState({}); // cartelaId -> Set of manually-daubed numbers
   const [navigatedAway, setNavigatedAway] = useState(false);
 
@@ -75,38 +74,6 @@ function LiveContent() {
       router.replace(`/game/winner?gameId=${gameId}`);
     }
   }, [gameState.winners, gameState.status, gameId, router, navigatedAway]);
-
-  // Play the B-I-N-G-O voice call for each newly-called number. The first
-  // `lastCalled` seen after mount/join is just "whatever the state already
-  // is" (e.g. rejoining mid-round or a page refresh) — not a fresh call —
-  // so it's recorded silently rather than played, and only genuinely new
-  // values after that trigger a sound.
-  const lastPlayedNumberRef = useRef(null);
-  const hasSeenFirstCallRef = useRef(false);
-  // Read via a ref (kept in sync below) rather than a `soundMuted` effect
-  // dependency, so toggling mute never re-runs/replays this effect — it
-  // just changes what the *next* call does.
-  const soundMutedRef = useRef(soundMuted);
-  useEffect(() => {
-    soundMutedRef.current = soundMuted;
-  }, [soundMuted]);
-  useEffect(() => {
-    const lc = gameState.lastCalled;
-    if (!lc) return;
-    if (!hasSeenFirstCallRef.current) {
-      hasSeenFirstCallRef.current = true;
-      lastPlayedNumberRef.current = lc.number;
-      return;
-    }
-    if (lastPlayedNumberRef.current === lc.number) return;
-    lastPlayedNumberRef.current = lc.number;
-    if (soundMutedRef.current) return;
-    const file = `${lc.letter}${String(lc.number).padStart(2, '0')}.ogg`;
-    const audio = new Audio(`/audio/${file}`);
-    // Autoplay can be blocked by the browser/WebView in some states — that's
-    // a silent no-op, never a thrown error the player would see.
-    audio.play().catch(() => {});
-  }, [gameState.lastCalled]);
 
   const markedSet = useMemo(() => new Set(gameState.calledNumbers), [gameState.calledNumbers]);
   const netPrizePool = gameState.grossPrizePool ? Math.floor(gameState.grossPrizePool * 0.85) : 0;
@@ -229,15 +196,6 @@ function LiveContent() {
           }`}
         >
           Auto {autoMode ? 'ON' : 'OFF'}
-        </button>
-        <button
-          onClick={() => setSoundMuted((v) => !v)}
-          aria-label={soundMuted ? 'Unmute number calls' : 'Mute number calls'}
-          className={`flex-1 py-3 rounded-lg text-sm font-bold border active:scale-[0.98] transition-transform ${
-            soundMuted ? 'bg-[#2E3440] text-mute border-[#3A4050]' : 'bg-[#0E5952]/20 text-[#4FD1B8] border-[#0E5952]/50'
-          }`}
-        >
-          {soundMuted ? '🔇 Muted' : '🔊 Sound'}
         </button>
       </div>
     </div>
