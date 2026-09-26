@@ -221,7 +221,7 @@ async function handleDepositMethod(ctx, method) {
   if (!user) return ctx.reply('Please register first.');
   await ack(ctx);
   await setState(telegramId, 'AWAITING_DEPOSIT_AMOUNT', { method });
-  await ctx.reply(`Enter the amount you wish to deposit (min: ${DEPOSIT_MIN} Birr, max: ${DEPOSIT_MAX} Birr)`);
+  await ctx.reply(`የገንዘብ መጠን ያስገቡ (min: ${DEPOSIT_MIN} Birr, max: ${DEPOSIT_MAX} Birr)`);
 }
 
 async function handleDepositAmount(ctx, text) {
@@ -237,7 +237,7 @@ async function handleDepositAmount(ctx, text) {
   if (method === 'CBE') {
     await ctx.reply(
       `💰 *[${amount} ብር]* ወደ CBE አካውንት 🏦: ${CBE_ACCOUNT}${CBE_ACCOUNT_NAME ? ` (${CBE_ACCOUNT_NAME})` : ''} ይላኩ።\n` +
-      `በመቀጠል ከ CBE የደረሰወትን የክፍያ ማረጋገጫ ስክሪንሾት (ሙሉውን፣ ሰዓቱንና የግብይት ቁጥሩን ጨምሮ) እዚህ ላይ ይላኩ።\n\n\n`,
+      `በመቀጠል በ CBE የላኩበትን ስክሪንሻት አድርገው እዚህ ላይ ይላኩ።\n\n\n`,
       { parse_mode: 'Markdown' }
     );
     return;
