@@ -60,6 +60,16 @@ services:
         value: "10"
       - key: DEPOSIT_PHONE_NUMBER
         sync: false
+      - key: TELEBIRR_RECIPIENT_NAME
+        sync: false
+      - key: TELEBIRR_RECIPIENT_PHONE_MASKED
+        sync: false
+      - key: CBE_RECIPIENT_NAME
+        sync: false
+      - key: CBE_RECIPIENT_ACCOUNT
+        sync: false
+      - key: CBE_RECIPIENT_ACCOUNT_MASKED
+        sync: false
       - key: DEPOSIT_MIN_AMOUNT
         value: "10"
       - key: DEPOSIT_MAX_AMOUNT
