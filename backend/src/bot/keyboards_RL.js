@@ -52,16 +52,6 @@ function playKeyboard(webAppUrl) {
   return Markup.inlineKeyboard([[Markup.button.webApp('Play Now', webAppUrl)]]);
 }
 
-/** Payment-method choice shown right when a player starts a deposit (§4.3). */
-function depositMethodKeyboard() {
-  return Markup.inlineKeyboard([
-    [
-      Markup.button.callback('📱 Telebirr', 'deposit_method_TELEBIRR'),
-      Markup.button.callback('🏦 CBE', 'deposit_method_CBE')
-    ]
-  ]);
-}
-
 function walletKeyboard() {
   return Markup.inlineKeyboard([
     [Markup.button.callback('Deposit 💵', 'deposit'), Markup.button.callback('Withdraw 💸', 'withdraw')],
@@ -76,8 +66,7 @@ function adminPanelKeyboard() {
     [Markup.button.callback('Manual Credit', 'admin_credit')],
     [Markup.button.callback('Dashboard Stats', 'admin_dashboard')],
     [Markup.button.callback('📊 TRANSACTION', 'admin_transactions')],
-    [Markup.button.callback('🏆 WINNERS', 'admin_winners')],
-    [Markup.button.callback('🎯 SIMULATOR', 'admin_simulator')]
+    [Markup.button.callback('🏆 WINNERS', 'admin_winners')]
   ]);
 }
 
@@ -139,7 +128,6 @@ module.exports = {
   shareContactKeyboard,
   removeKeyboard,
   playKeyboard,
-  depositMethodKeyboard,
   walletKeyboard,
   adminPanelKeyboard,
   paginationKeyboard,

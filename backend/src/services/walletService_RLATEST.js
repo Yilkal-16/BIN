@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 const { User, Transaction, AdminRequest, HouseWallet, getNextSequence } = require('../models');
-const { generateReferenceId, isWholeBirr } = require('../utils/helpers');
+const { generateReferenceId } = require('../utils/helpers');
 const { ApiError } = require('../middleware/errorHandler');
 const logger = require('../utils/logger');
 
@@ -91,7 +91,7 @@ async function recomputeBalanceFromLedger(userId) {
     if (tx.type === 'DEPOSIT') {
       if (tx.status === 'APPROVED') return sum + tx.amount;
       if (tx.status === 'REVERSED') {
-        const penalty = (tx.metadata && tx.metadata.reversalPenaltyAmount) || Math.round(tx.amount * REVERSAL_PENALTY_RATE);
+        const penalty = (tx.metadata && tx.metadata.reversalPenaltyAmount) || tx.amount * REVERSAL_PENALTY_RATE;
         return sum - penalty;
       }
       return sum; // PENDING / MANUAL_REVIEW / FAILED — not yet reflected in the wallet balance
@@ -131,17 +131,10 @@ async function recomputeBalanceFromLedger(userId) {
  * the pasted Telebirr SMS. Idempotent on receiptNumber (§4.3 Admin Override
  * note / §8.4).
  */
-async function submitDeposit(userId, amount, rawProof, method = 'TELEBIRR') {
-  if (!isWholeBirr(amount)) {
-    throw new ApiError(400, 'INVALID_AMOUNT', 'Deposit amount must be a whole number of Birr (no fractions).');
-  }
+async function submitDeposit(userId, amount, rawProof) {
   if (!(amount >= Number(process.env.DEPOSIT_MIN_AMOUNT || 10)) ||
       amount > Number(process.env.DEPOSIT_MAX_AMOUNT || 50000)) {
     throw new ApiError(400, 'INVALID_AMOUNT', 'Deposit amount is outside the allowed range.');
-  }
-  const normalizedMethod = String(method || 'TELEBIRR').toUpperCase();
-  if (!['TELEBIRR', 'CBE'].includes(normalizedMethod)) {
-    throw new ApiError(400, 'INVALID_METHOD', 'Unsupported deposit method.');
   }
 
   // Parse first so the dedup key is the actual transaction ID (stable,
@@ -150,20 +143,9 @@ async function submitDeposit(userId, amount, rawProof, method = 'TELEBIRR') {
   // different receipts). If nothing recognizable can be extracted, dedup
   // falls back to skipping the receiptNumber entirely (sparse unique index
   // permits that) and the request goes straight to manual review.
-  // Method picks which SMS-verification module parses/checks the proof —
-  // Telebirr and CBE confirmation SMS have entirely different formats (see
-  // telebirrVerification.js / cbeVerification.js).
-  const verificationModule = normalizedMethod === 'CBE'
-    ? require('./cbeVerification')
-    : require('./telebirrVerification');
-  const { parseProofInput, verifyDepositDetailed } = verificationModule;
+  const { parseProofInput, verifyDepositDetailed } = require('./telebirrVerification');
   const parsed = parseProofInput(rawProof);
-  // CBE and Telebirr transaction IDs come from unrelated ID spaces (and CBE's
-  // can contain lowercase letters/hyphens where Telebirr's can't), so a plain
-  // dedup key could theoretically collide across methods. Prefixing keeps
-  // the two namespaces separate while still deduping repeat submissions of
-  // the exact same receipt.
-  const dedupKey = parsed.transactionId ? `${normalizedMethod}-${parsed.transactionId}` : null;
+  const dedupKey = parsed.transactionId || null;
 
   if (dedupKey) {
     const existing = await Transaction.findOne({ receiptNumber: dedupKey });
@@ -187,7 +169,7 @@ async function submitDeposit(userId, amount, rawProof, method = 'TELEBIRR') {
       referenceId,
       status: 'PENDING',
       description: 'Deposit pending verification',
-      metadata: { rawProof, parsedTransactionId: dedupKey, depositMethod: normalizedMethod }
+      metadata: { rawProof, parsedTransactionId: dedupKey }
     });
   } catch (err) {
     if (err.code === 11000) {
@@ -312,9 +294,7 @@ async function reverseDeposit(adminRequestId, adminId) {
   const transaction = await Transaction.findOne({ 'metadata.adminRequestId': adminRequest._id.toString() });
   if (!transaction) throw new ApiError(404, 'NOT_FOUND', 'Linked transaction not found');
 
-  // Rounded to a whole Birr — this platform never carries a fractional
-  // balance, so a penalty like 33 * 0.4 = 13.2 must land on a whole number.
-  const penaltyAmount = Math.round(transaction.amount * REVERSAL_PENALTY_RATE);
+  const penaltyAmount = transaction.amount * REVERSAL_PENALTY_RATE;
   const totalDeduction = transaction.amount + penaltyAmount;
 
   const session = await mongoose.startSession();
@@ -399,7 +379,7 @@ async function declineDeposit(adminRequestId, adminId, reason) {
 
 /** Admin manually credits a user's wallet, funded from the House Wallet (§7.2). */
 async function adminCredit(targetUserId, amount, adminId, description = 'Manual admin credit') {
-  if (!isWholeBirr(amount)) throw new ApiError(400, 'INVALID_AMOUNT', 'Credit amount must be a whole number of Birr (no fractions).');
+  if (!(amount > 0)) throw new ApiError(400, 'INVALID_AMOUNT', 'Credit amount must be positive');
   const maxCredit = Number(process.env.ADMIN_CREDIT_MAX_AMOUNT || 2000);
   if (amount > maxCredit) {
     throw new ApiError(400, 'INVALID_AMOUNT', `Credit amount cannot exceed ${maxCredit} Birr`);
@@ -428,9 +408,6 @@ async function adminCredit(targetUserId, amount, adminId, description = 'Manual 
  * amount is placed on hold").
  */
 async function requestWithdrawal(userId, amount) {
-  if (!isWholeBirr(amount)) {
-    throw new ApiError(400, 'INVALID_AMOUNT', 'Withdrawal amount must be a whole number of Birr (no fractions).');
-  }
   const min = Number(process.env.WITHDRAW_MIN_AMOUNT || 50);
   const max = Number(process.env.WITHDRAW_MAX_AMOUNT || 15000);
   if (amount < min || amount > max) {

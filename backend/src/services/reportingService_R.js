@@ -1,4 +1,4 @@
-const { User, Game, AdminRequest, Transaction } = require('../models');
+const { User, Game, AdminRequest } = require('../models');
 const { STAKES } = require('../utils/helpers');
 
 /**
@@ -152,45 +152,16 @@ async function getWithdrawalTotals(periods) {
   };
 }
 
-/**
- * Manual (admin) credits per period — ADMIN_CREDIT ledger rows, COMPLETED
- * only (adminCredit() in walletService always creates them COMPLETED, so
- * this matches every manual credit ever issued). Bucketed by `timestamp`,
- * the Transaction model's own creation time — ADMIN_CREDIT rows aren't
- * backed by an AdminRequest, so there's no separate completedAt to use.
- */
-async function getManualCreditTotals(periods) {
-  const groupSum = { $group: { _id: null, count: { $sum: 1 }, total: { $sum: '$amount' } } };
-  const [result] = await Transaction.aggregate([
-    { $match: { type: 'ADMIN_CREDIT', status: 'COMPLETED' } },
-    {
-      $facet: {
-        daily: [{ $match: { timestamp: { $gte: periods.daily } } }, groupSum],
-        weekly: [{ $match: { timestamp: { $gte: periods.weekly } } }, groupSum],
-        monthly: [{ $match: { timestamp: { $gte: periods.monthly } } }, groupSum],
-        total: [groupSum]
-      }
-    }
-  ]);
-  return {
-    daily: sumOf(result.daily),
-    weekly: sumOf(result.weekly),
-    monthly: sumOf(result.monthly),
-    total: sumOf(result.total)
-  };
-}
-
 /** Full transaction summary — see the "TRANSACTION" admin panel tab. */
 async function getTransactionSummary(now = new Date()) {
   const periods = getPeriodStarts(now);
-  const [users, gamesByStake, deposits, manualCredits, withdrawals] = await Promise.all([
+  const [users, gamesByStake, deposits, withdrawals] = await Promise.all([
     getUserCounts(periods),
     getGameStakeCounts(periods),
     getDepositTotals(periods),
-    getManualCreditTotals(periods),
     getWithdrawalTotals(periods)
   ]);
-  return { generatedAt: now, users, gamesByStake, deposits, manualCredits, withdrawals };
+  return { generatedAt: now, users, gamesByStake, deposits, withdrawals };
 }
 
 module.exports = { getTransactionSummary, getPeriodStarts };

@@ -4,33 +4,17 @@ const { getNextSequence } = require('../models/Counter');
 const { shuffle } = require('../utils/helpers');
 const cartelaService = require('../services/cartelaService');
 const logger = require('../utils/logger');
-const simulatorService = require('../services/simulatorService');
 
 /** Ensures at least 2 unused draw sequences exist, generating a batch of 12 if not (§6.2). */
 async function ensureDrawSequences() {
   const unused = await DrawSequence.countDocuments({ used: false });
-
-  // Backfill sequences created before the simulator upgrade. This also makes
-  // the admin Simulator tab immediately useful after deployment.
-  await simulatorService.ensurePredictionsForExistingSequences();
-
   if (unused >= 2) return;
-
   const batch = [];
   for (let i = 0; i < 12; i++) {
-    batch.push({
-      numbers: shuffle(Array.from({ length: 75 }, (_, i2) => i2 + 1)),
-      used: false
-    });
+    batch.push({ numbers: shuffle(Array.from({ length: 75 }, (_, i2) => i2 + 1)), used: false });
   }
-
-  const inserted = await DrawSequence.insertMany(batch);
-
-  // IMPORTANT: predictions are generated immediately from the exact stored
-  // sequences, before any sequence can be claimed by a game.
-  await simulatorService.generatePredictionsForSequences(inserted);
-
-  logger.info('Generated a new batch of 12 draw sequences with simulator predictions');
+  await DrawSequence.insertMany(batch);
+  logger.info('Generated a new batch of 12 draw sequences');
 }
 
 async function claimDrawSequence(gameId) {

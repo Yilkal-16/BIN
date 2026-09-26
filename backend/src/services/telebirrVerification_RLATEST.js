@@ -155,11 +155,7 @@ function parseProofInput(rawText) {
  */
 function parseAmount(raw) {
   const n = parseFloat(String(raw).replace(/,/g, ''));
-  // Whole-Birr rule: the SMS always renders cents (e.g. "100.00"), but this
-  // platform never carries a fractional balance, so round to the nearest
-  // Birr before it's compared against the user-entered (already whole)
-  // amount.
-  return Number.isFinite(n) ? Math.round(n) : null;
+  return Number.isFinite(n) ? n : null;
 }
 
 /**
@@ -204,10 +200,7 @@ function isWithinMaxAge(date) {
  * Check if transaction ID is already used in another deposit
  */
 async function isTransactionIdAlreadyUsed(transactionId, excludeTransactionId) {
-  // Matches the method-prefixed receiptNumber walletService.submitDeposit
-  // actually stores (see dedupKey there) — keeps Telebirr and CBE
-  // transaction-ID namespaces from colliding with each other.
-  const query = { receiptNumber: `TELEBIRR-${transactionId}` };
+  const query = { receiptNumber: transactionId };
   if (excludeTransactionId) query._id = { $ne: excludeTransactionId };
   const existing = await Transaction.findOne(query).select('_id');
   return !!existing;
