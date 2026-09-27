@@ -59,7 +59,7 @@ export const api = {
     const qs = new URLSearchParams(params).toString();
     return request(`/api/wallet/transactions${qs ? `?${qs}` : ''}`);
   },
-  requestDeposit: (amount, proof) => request('/api/wallet/deposit', { method: 'POST', body: { amount, proof } }),
+  requestDeposit: (amount, proof, method = 'TELEBIRR') => request('/api/wallet/deposit', { method: 'POST', body: { amount, proof, method } }),
   requestWithdrawal: (amount) => request('/api/wallet/withdraw', { method: 'POST', body: { amount } }),
   getLobby: (stake = 10) => request(`/api/game/lobby?stake=${stake}`),
   getGameState: (gameId) => request(`/api/game/state?gameId=${encodeURIComponent(gameId)}`),

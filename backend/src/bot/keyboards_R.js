@@ -64,8 +64,23 @@ function adminPanelKeyboard() {
     [Markup.button.callback('Pending Deposits', 'admin_deposits')],
     [Markup.button.callback('Pending Withdrawals', 'admin_withdrawals')],
     [Markup.button.callback('Manual Credit', 'admin_credit')],
-    [Markup.button.callback('Dashboard Stats', 'admin_dashboard')]
+    [Markup.button.callback('Dashboard Stats', 'admin_dashboard')],
+    [Markup.button.callback('📊 TRANSACTION', 'admin_transactions')]
   ]);
+}
+
+/**
+ * Prev/Next row for a paginated admin list. `prefix` is the callback-data
+ * prefix this list's page buttons are registered under in webhook.js (e.g.
+ * 'admin_wd_page'); tapping a button sends `${prefix}_<page>`. Omits a
+ * direction's button rather than disabling it, since Telegram inline
+ * buttons can't be disabled.
+ */
+function paginationKeyboard(prefix, page, totalPages) {
+  const row = [];
+  if (page > 1) row.push(Markup.button.callback('◀️ Prev', `${prefix}_${page - 1}`));
+  if (page < totalPages) row.push(Markup.button.callback('Next ▶️', `${prefix}_${page + 1}`));
+  return Markup.inlineKeyboard(row.length ? [row] : []);
 }
 
 function approveDeclineKeyboard(type, id) {
@@ -114,6 +129,7 @@ module.exports = {
   playKeyboard,
   walletKeyboard,
   adminPanelKeyboard,
+  paginationKeyboard,
   approveDeclineKeyboard,
   depositActionKeyboard
 };

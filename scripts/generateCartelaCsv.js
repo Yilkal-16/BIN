@@ -1,11 +1,11 @@
 /**
- * Generates data/cartelas.csv: 600 unique, valid 75-ball Bingo cards.
+ * Generates data/cartelas.csv: 200 unique, valid 75-ball Bingo cards.
  *
  * Column ranges (§6.1): B 1-15, I 16-30, N 31-45 (free center), G 46-60, O 61-75.
  * Each column draws 5 unique numbers from its 15-number range without
  * replacement — the standard construction for a 75-ball card — so every
  * generated card is internally valid by definition. Full-grid collisions
- * across all 600 cards are checked and are, in practice, astronomically
+ * across all 200 cards are checked and are, in practice, astronomically
  * unlikely (each column alone has 15!/10! ≈ 360,360 orderings).
  */
 const fs = require('fs');
@@ -50,7 +50,7 @@ function gridSignature(grid) {
 }
 
 function main() {
-  const count = 600;
+  const count = 200;
   const seen = new Set();
   const cards = [];
 

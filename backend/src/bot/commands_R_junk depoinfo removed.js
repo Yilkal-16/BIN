@@ -1,25 +1,21 @@
-const { User, UserState, AdminRequest, Transaction, HouseWallet, Game, DrawSequence } = require('../models');
+const { User, UserState, AdminRequest, Transaction, HouseWallet, Game } = require('../models');
 const walletService = require('../services/walletService');
 const notificationService = require('../services/notificationService');
 const reportingService = require('../services/reportingService');
-const simulatorService = require('../services/simulatorService');
 const { redis, recordAdminPinAttempt, isAdminLockedOut } = require('../utils/redis');
 const { STAKES } = require('../utils/helpers');
 const logger = require('../utils/logger');
 const kb = require('./keyboards');
-const cbeVerification = require('../services/cbeVerification');
-const { readCbeReceipt, ALLOWED_MEDIA_TYPES, MAX_IMAGE_BYTES } = require('../services/cbeReceiptReader');
 
 const WEBAPP_URL = process.env.WEBAPP_URL;
 const ADMIN_ID = process.env.ADMIN_ID;
 const DEPOSIT_PHONE = process.env.DEPOSIT_PHONE_NUMBER || '0911587568';
-// Two different CBE env vars, two different jobs:
-//  - CBE_RECIPIENT_ACCOUNT_MASKED: the masked form ("1********9222") — only its
-//    last 4 digits are used, by cbeVerification.js, to match the account shown
-//    on the receipt screenshot. Never shown to anyone.
-//  - CBE_RECIPIENT_ACCOUNT: the real, full account number depositors are
-//    told to send money to.
-const CBE_ACCOUNT = process.env.CBE_RECIPIENT_ACCOUNT || '';
+// Same account number shown to the player is also what cbeVerification.js
+// matches the confirmation SMS against — there's only one CBE account this
+// platform ever deposits into, so one env var covers both display and
+// verification (mirrors how the masked account naturally appears on the
+// player's own banking app already).
+const CBE_ACCOUNT = process.env.CBE_RECIPIENT_ACCOUNT_MASKED || '1********9222';
 const CBE_ACCOUNT_NAME = process.env.CBE_RECIPIENT_NAME || 'Mekuryaw Bele Tarik';
 const DEPOSIT_MIN = Number(process.env.DEPOSIT_MIN_AMOUNT || 50);
 const DEPOSIT_MAX = Number(process.env.DEPOSIT_MAX_AMOUNT || 50000);
@@ -237,7 +233,7 @@ async function handleDepositAmount(ctx, text) {
   if (method === 'CBE') {
     await ctx.reply(
       `💰 *[${amount} ብር]* ወደ CBE አካውንት 🏦: ${CBE_ACCOUNT}${CBE_ACCOUNT_NAME ? ` (${CBE_ACCOUNT_NAME})` : ''} ይላኩ።\n` +
-      `በመቀጠል ከ CBE የደረሰወትን የክፍያ ማረጋገጫ ስክሪንሾት (ሙሉውን፣ ሰዓቱንና የግብይት ቁጥሩን ጨምሮ) እዚህ ላይ ይላኩ።\n\n\n`,
+      `በመቀጠል ከ CBE የደረሰወትን ማረጋገጫ ቴክስት (SMS) እዚህ ላይ ያስገቡ።\n\n\n`,
       { parse_mode: 'Markdown' }
     );
     return;
@@ -258,12 +254,6 @@ async function handleDepositProof(ctx, text) {
   const amount = state.data.amount;
   const method = state.data.method || 'TELEBIRR';
   const rawProof = text.trim();
-
-  // CBE proof is a screenshot only (handleDepositPhoto). Typed text must never
-  // reach verification, so nobody can hand-write a "receipt".
-  if (method === 'CBE') {
-    return ctx.reply('📸 Please send a screenshot of the CBE receipt (the "Transaction Completed Successfully" screen) instead of text.');
-  }
 
   await clearState(telegramId);
   await ctx.reply('🔄 Verifying your payment, please wait...');
@@ -290,91 +280,7 @@ async function handleDepositProof(ctx, text) {
   return ctx.reply(depositFailureMessage(result.reason, method), { parse_mode: 'Markdown' });
 }
 
-// CBE deposit proof: a screenshot of the CBE app's success screen. Register with
-//   bot.on('photo', commands.handleDepositPhoto);
-//   bot.on('document', commands.handleDepositPhoto);   // screenshot sent "as file"
-async function handleDepositPhoto(ctx) {
-  const telegramId = String(ctx.from.id);
-  const state = await getState(telegramId);
-  if (!state || state.action !== 'AWAITING_DEPOSIT_PROOF') return; // not mid-deposit — ignore
-  const method = (state.data && state.data.method) || 'TELEBIRR';
-  if (method !== 'CBE') {
-    return ctx.reply('Please paste the confirmation SMS text from Telebirr (not an image).');
-  }
-
-  const msg = ctx.message;
-  let fileId;
-  let mediaType;
-  let isDocument = false;
-  if (msg.photo && msg.photo.length) {
-    fileId = msg.photo[msg.photo.length - 1].file_id; // largest size Telegram kept
-    mediaType = 'image/jpeg';
-  } else if (msg.document && ALLOWED_MEDIA_TYPES.has(msg.document.mime_type)) {
-    fileId = msg.document.file_id;
-    mediaType = msg.document.mime_type;
-    isDocument = true;
-  } else {
-    return ctx.reply('Please send the receipt as an image (JPG or PNG screenshot).');
-  }
-
-  const user = await getUser(telegramId);
-  const amount = state.data.amount;
-  await clearState(telegramId);
-  await ctx.reply('🔄 Verifying your payment, please wait...');
-
-  // Read the screenshot. If reading fails (API down, bad image) we still submit
-  // an "unreadable" proof so the deposit lands in manual review instead of vanishing.
-  let rawProof;
-  try {
-    const link = await ctx.telegram.getFileLink(fileId);
-    const res = await fetch(String(link));
-    if (!res.ok) throw new Error(`Telegram file download failed (${res.status})`);
-    const buffer = Buffer.from(await res.arrayBuffer());
-    if (buffer.length > MAX_IMAGE_BYTES) throw new Error('screenshot larger than 5 MB');
-    const fields = await readCbeReceipt(buffer, mediaType);
-    rawProof = cbeVerification.serializeProof(fields, fileId);
-  } catch (err) {
-    logger.error('CBE screenshot read failed', { telegramId, message: err.message });
-    rawProof = cbeVerification.serializeProof(null, fileId);
-  }
-
-  const result = await walletService.submitDeposit(user._id, amount, rawProof, 'CBE');
-
-  if (result.duplicate) {
-    return ctx.reply(
-      `⚠️ This receipt has already been submitted (status: ${result.transaction.status}). ` +
-        `If you believe this is an error, please contact support.`
-    );
-  }
-
-  if (result.verified) {
-    return ctx.reply(
-      `✅ *Deposit Successful!*\n` +
-        `Your wallet has been credited with ${amount} Birr.\n` +
-        `💰 *New Balance:* ${result.newBalance} Birr\n` +
-        `📋 *Transaction ID:* TXN-${result.transaction._id.toString().slice(-8)}`,
-      { parse_mode: 'Markdown' }
-    );
-  }
-
-  // Manual review needs the actual image, and the stored proof is only text — send it to the admin.
-  if (ADMIN_ID) {
-    try {
-      const caption =
-        `🔍 CBE screenshot needs manual review\n` +
-        `User: ${user.displayName} (${user.phone})\nAmount entered: ${amount} Birr\nReason: ${result.reason || 'n/a'}`;
-      if (isDocument) await ctx.telegram.sendDocument(ADMIN_ID, fileId, { caption });
-      else await ctx.telegram.sendPhoto(ADMIN_ID, fileId, { caption });
-    } catch (err) {
-      logger.warn('Could not forward CBE screenshot to admin', { message: err.message });
-    }
-  }
-
-  return ctx.reply(depositFailureMessage(result.reason, 'CBE'), { parse_mode: 'Markdown' });
-}
-
 function depositFailureMessage(reason, method = 'TELEBIRR') {
-  if (method === 'CBE') return cbeDepositFailureMessage(reason);
   const providerLabel = method === 'CBE' ? 'CBE' : 'Telebirr';
   const base = {
     UNPARSEABLE:
@@ -397,40 +303,13 @@ function depositFailureMessage(reason, method = 'TELEBIRR') {
       `Each Telebirr confirmation can only be used once. An admin will review this manually.`,
     WITHINTIMEWINDOW:
       `⏳ *This confirmation is too old to auto-verify* (must be within 10 minutes of the transaction).\n` +
-      `An admin will review this manually.`
-  };
-  return (
-    base[reason] ||
-    `❌ *Deposit Verification Failed*\n` +
-      `We could not verify your payment automatically. An admin will review this request manually — ` +
-      `you'll be notified once it's confirmed.`
-  );
-}
-
-// Only honest-mistake failures get a specific message. Anti-forgery checks
-// (isCbeReceipt, fee arithmetic, ID/date consistency) fall through to the generic
-// "manual review" text so a bad actor can't learn which check tripped.
-function cbeDepositFailureMessage(reason) {
-  const base = {
-    UNPARSEABLE:
-      `❌ *We couldn't read that screenshot.*\n` +
-      `Please send the *full* CBE success screen (amount, names, date/time and transaction ID all visible). ` +
       `An admin will review this manually.`,
-    AMOUNTMATCHES:
-      `❌ *The amount on the receipt doesn't match what you entered.*\n` +
-      `Please double check the amount, or wait for manual admin review.`,
-    RECIPIENTNAMEMATCHES:
-      `❌ *This payment doesn't appear to have been sent to our CBE account.*\n` +
-      `An admin will review this manually.`,
-    RECIPIENTACCOUNTMATCHES:
-      `❌ *This payment doesn't appear to have been sent to our CBE account.*\n` +
-      `An admin will review this manually.`,
-    RECEIPTWITHINTIMEWINDOW:
-      `⏳ *This receipt is too old to auto-verify* (must be within 10 minutes of the transaction).\n` +
-      `An admin will review this manually.`,
-    TRANSACTIONIDNOTUSED:
+    RECEIPTSLUGFORMATVALID:
+      `❌ *That doesn't look like a valid CBE receipt link.*\n` +
+      `Please double check you pasted the correct confirmation message.`,
+    RECEIPTSLUGNOTUSED:
       `❌ *This transaction has already been used for a previous deposit.*\n` +
-      `Each CBE receipt can only be used once. An admin will review this manually.`
+      `Each CBE confirmation can only be used once. An admin will review this manually.`
   };
   return (
     base[reason] ||
@@ -797,130 +676,6 @@ async function handleAdminWinnersPage(ctx, page) {
   await sendWinnersPage(ctx, Number(page));
 }
 
-// "SIMULATOR" tab — shows the precomputed top-3 cartelas for every
-// upcoming/current game. Predictions are generated and stored immediately
-// when draw sequences are created, so this view never generates a new draw.
-//
-// Telegram's legacy Markdown parser is deliberately NOT used here. Pattern
-// names such as "DIAGONAL_LINE" contain underscores and can cause Telegram
-// to reject the whole message with "can't parse entities". HTML with proper
-// escaping is used instead, so database values can never break Telegram's
-// entity parser.
-function escapeTelegramHtml(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\"/g, '&quot;');
-}
-
-async function sendSimulatorPage(ctx, page) {
-  // Current games first, followed by still-unclaimed future sequences.
-  const activeGames = await Game.find({
-    status: { $in: ['WAITING', 'ACTIVE', 'SETTLING'] },
-    drawSequenceId: { $ne: null }
-  }, { gameId: 1, stake: 1, status: 1, drawSequenceId: 1 }).lean();
-
-  const activeBySequence = new Map(
-    activeGames.map((game) => [String(game.drawSequenceId), game])
-  );
-
-  const activeSequenceIds = activeGames.map((game) => game.drawSequenceId);
-  const upcomingSequences = await DrawSequence.find({
-    $or: [
-      { used: false },
-      ...(activeSequenceIds.length ? [{ _id: { $in: activeSequenceIds } }] : [])
-    ]
-  })
-    .sort({ createdAt: 1, _id: 1 })
-    .lean();
-
-  const total = upcomingSequences.length;
-  const totalPages = Math.max(1, Math.ceil(total / ADMIN_PAGE_SIZE));
-  page = Math.min(Math.max(1, page), totalPages);
-
-  if (total === 0) {
-    await ctx.reply('<b>🎯 SIMULATOR</b>\nNo upcoming draw sequences are currently available.', { parse_mode: 'HTML' });
-    return;
-  }
-
-  const pageItems = upcomingSequences.slice(
-    (page - 1) * ADMIN_PAGE_SIZE,
-    page * ADMIN_PAGE_SIZE
-  );
-
-  const lines = [
-    '<b>🎯 SIMULATOR — PRECOMPUTED WINNERS</b>',
-    `Showing <b>${pageItems.length}</b> of <b>${total}</b> upcoming/current sequence(s).`,
-    'The list is generated from the stored 75-number draw order and the 200 cartela master set.',
-    ''
-  ];
-
-  pageItems.forEach((sequence, index) => {
-    const game = activeBySequence.get(String(sequence._id));
-    const position = (page - 1) * ADMIN_PAGE_SIZE + index + 1;
-    const status = game
-      ? `GAME ${game.gameId} · ${game.stake} Birr · ${game.status}`
-      : 'UPCOMING · not yet claimed';
-
-    lines.push(`<b>${position}. ${escapeTelegramHtml(status)}</b>`);
-    lines.push(`Sequence: <code>${escapeTelegramHtml(String(sequence._id).slice(-8))}</code>`);
-
-    const winners = (sequence.predictedWinners || []).slice(0, 3);
-    if (winners.length === 0) {
-      lines.push('⚠️ No top-3 prediction is stored for this sequence.');
-    } else {
-      winners.forEach((winner) => {
-        const patterns = Array.isArray(winner.patterns) && winner.patterns.length
-          ? winner.patterns.join(', ')
-          : 'UNKNOWN_PATTERN';
-        lines.push(
-          `${escapeTelegramHtml(winner.rank)}. Cartela <b>#${escapeTelegramHtml(winner.cartelaId)}</b>` +
-          ` — draw <b>#${escapeTelegramHtml(winner.drawIndex)}</b>` +
-          ` (${escapeTelegramHtml(winner.drawNumber)})` +
-          ` — <code>${escapeTelegramHtml(patterns)}</code>`
-        );
-      });
-    }
-
-    lines.push('');
-  });
-
-  lines.push(`Page <b>${page}/${totalPages}</b>`);
-
-  await ctx.reply(lines.join('\n'), {
-    parse_mode: 'HTML',
-    ...kb.paginationKeyboard('admin_simulator_page', page, totalPages)
-  });
-}
-
-async function handleAdminSimulator(ctx) {
-  const admin = await requireAdminSession(ctx);
-  if (!admin) return;
-  await ctx.answerCbQuery();
-  try {
-    // Backfill any old sequences that predate this feature before displaying.
-    await simulatorService.ensurePredictionsForExistingSequences();
-    await sendSimulatorPage(ctx, 1);
-  } catch (err) {
-    logger.error('Simulator admin view failed', { error: err.message, stack: err.stack });
-    await ctx.reply(`⚠️ Simulator unavailable: ${err.message}`);
-  }
-}
-
-async function handleAdminSimulatorPage(ctx, page) {
-  const admin = await requireAdminSession(ctx);
-  if (!admin) return;
-  await ctx.answerCbQuery();
-  try {
-    await simulatorService.ensurePredictionsForExistingSequences();
-    await sendSimulatorPage(ctx, Number(page));
-  } catch (err) {
-    logger.error('Simulator admin page failed', { error: err.message, stack: err.stack });
-    await ctx.reply(`⚠️ Simulator unavailable: ${err.message}`);
-  }
-}
-
 async function handleDepositDecision(ctx, action, id) {
   const admin = await requireAdminSession(ctx);
   if (!admin) return;
@@ -1083,7 +838,6 @@ module.exports = {
   handleCopyCode,
   handleDepositButton,
   handleDepositMethod,
-  handleDepositPhoto,
   handleWithdrawButton,
   handleSupport,
   handleInfo,
@@ -1097,8 +851,6 @@ module.exports = {
   handleAdminTransactions,
   handleAdminWinners,
   handleAdminWinnersPage,
-  handleAdminSimulator,
-  handleAdminSimulatorPage,
   handleDepositDecision,
   handleWithdrawDecision,
   handleAdminCreditButton,

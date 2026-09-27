@@ -186,10 +186,15 @@ async function settleGame(gameId, winners, noWinner) {
         return;
       }
 
-      const commission = Math.round(grossPrizePool * HOUSE_COMMISSION_RATE * 100) / 100;
+      // Whole-Birr rule: no balance in this system ever carries a fraction
+      // of a Birr, so every step here rounds to a whole Birr rather than
+      // to cents. Any leftover from the per-winner division still goes to
+      // the house as HOUSE_FRACTIONAL, exactly as before — it's just now a
+      // whole-Birr leftover instead of a sub-Birr one.
+      const commission = Math.round(grossPrizePool * HOUSE_COMMISSION_RATE);
       const netPrizePool = grossPrizePool - commission;
-      const perWinner = Math.floor((netPrizePool / winners.length) * 100) / 100;
-      const remainder = Math.round((netPrizePool - perWinner * winners.length) * 100) / 100;
+      const perWinner = Math.floor(netPrizePool / winners.length);
+      const remainder = netPrizePool - perWinner * winners.length;
 
       // House commission — real house earning, taken from this round's escrow.
       if (commission > 0) {

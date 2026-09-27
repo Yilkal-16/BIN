@@ -11,54 +11,27 @@ const { Transaction } = require('../models');
  *
  * Field extraction order (each field extracted independently):
  *   1. Transaction ID   - /transaction number is/i or /የሂሳብ እንቅስቃሴ ቁጥርዎ/i
- *   2. Phone            - built from TELEBIRR_RECIPIENT_PHONE_MASKED (exact match, both languages)
+ *   2. Phone            - /\((2519\*{4}7568)\)/ (exact match, both languages)
  *   3. Date & Time      - /(\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}:\d{2})/
  *   4. Amount           - /ETB\s*([\d,]+\.\d+)/i or /([\d,]+\.\d+)\s*ብር/
- *   5. Recipient Name   - anchored on the digits before the mask in TELEBIRR_RECIPIENT_PHONE_MASKED
+ *   5. Recipient Name   - /to\s+(.+?)\s*\(2519/i or /ወደ\s+(.+?)\s*\(2519/i
  *   6. Receipt URL      - /https:\/\/transactioninfo\.ethiotelecom\.et\/receipt\/[A-Z0-9]+/i
  *
  * Six checks run against extracted data:
  *   1. Amount        — claimed amount matches user-entered amount
- *   2. Recipient name — must equal TELEBIRR_RECIPIENT_NAME (case-insensitive)
- *   3. Recipient phone — must equal TELEBIRR_RECIPIENT_PHONE_MASKED
+ *   2. Recipient name — must equal "Yilkal Tessega" (case-insensitive)
+ *   3. Recipient phone — must equal "2519****7568"
  *   4. Transaction ID  — must be valid format (8-15 uppercase alphanumeric)
  *   5. Transaction ID  — must not already be used
  *   6. Date & time     — must be within 45 minutes
  * ============================================================================
  */
 
-// ---- Business constants ----
-// Recipient name/phone are configured via environment variables (e.g. set in
-// the Render dashboard under the service's "Environment" tab) rather than
-// hard-coded, so they can be changed without a code deploy.
-//   TELEBIRR_RECIPIENT_NAME          e.g. "Yilkal Tessega"
-//   TELEBIRR_RECIPIENT_PHONE_MASKED  e.g. "2519****7568"
-const EXPECTED_RECIPIENT_NAME = process.env.TELEBIRR_RECIPIENT_NAME;
-const EXPECTED_RECIPIENT_PHONE_MASKED = process.env.TELEBIRR_RECIPIENT_PHONE_MASKED;
+// ---- Hard-coded business constants ----
+const EXPECTED_RECIPIENT_NAME = 'Yilkal Tessega';
+const EXPECTED_RECIPIENT_PHONE_MASKED = '2519****7568';
 const MAX_TRANSACTION_AGE_MINUTES = 45;
 const TRANSACTION_ID_FORMAT = /^[A-Z0-9]{8,15}$/i;
-
-if (!EXPECTED_RECIPIENT_NAME || !EXPECTED_RECIPIENT_PHONE_MASKED) {
-  throw new Error(
-    'telebirrVerification: missing required environment variables. ' +
-    'Please set TELEBIRR_RECIPIENT_NAME and TELEBIRR_RECIPIENT_PHONE_MASKED ' +
-    '(e.g. in the Render service\'s Environment settings).'
-  );
-}
-
-function escapeRegex(str) {
-  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-// The masked phone (e.g. "2519****7568") uses literal "*" characters as the
-// masked digits, same as they appear in the SMS text itself, so escaping it
-// for regex use also happens to produce the right "match literal asterisks"
-// pattern without any special-casing.
-const RECIPIENT_PHONE_REGEX = new RegExp(`\\((${escapeRegex(EXPECTED_RECIPIENT_PHONE_MASKED)})\\)`);
-// Digits before the mask (e.g. "2519"), used to anchor recipient-name extraction.
-const RECIPIENT_PHONE_PREFIX = EXPECTED_RECIPIENT_PHONE_MASKED.split('*')[0];
-const RECIPIENT_NAME_EN_REGEX = new RegExp(`to\\s+(.+?)\\s*\\(${escapeRegex(RECIPIENT_PHONE_PREFIX)}`, 'i');
-const RECIPIENT_NAME_AM_REGEX = new RegExp(`ወደ\\s+(.+?)\\s*\\(${escapeRegex(RECIPIENT_PHONE_PREFIX)}`, 'i');
 
 /**
  * Extracts fields individually from the SMS text.
@@ -90,9 +63,8 @@ function parseProofInput(rawText) {
   }
 
   // ---- 2. Extract Phone (with capturing group) ----
-  // Same format in both languages: (2519****7568) — pattern built from the
-  // TELEBIRR_RECIPIENT_PHONE_MASKED env var, see RECIPIENT_PHONE_REGEX above.
-  const phoneMatch = text.match(RECIPIENT_PHONE_REGEX)?.[1];
+  // Same format in both languages: (2519****7568)
+  const phoneMatch = text.match(/\((2519\*{4}7568)\)/)?.[1];
   if (phoneMatch) {
     result.recipientPhoneMasked = phoneMatch;
   }
@@ -119,10 +91,9 @@ function parseProofInput(rawText) {
   // ---- 5. Extract Recipient Name ----
   // English: "to Yilkal Tessega (2519****7568)"
   // Amharic: "ወደ Yilkal Tessega(2519****7568)"
-  // Anchored on the phone prefix derived from TELEBIRR_RECIPIENT_PHONE_MASKED.
   const recipientMatch = 
-    text.match(RECIPIENT_NAME_EN_REGEX)?.[1] ||
-    text.match(RECIPIENT_NAME_AM_REGEX)?.[1];
+    text.match(/to\s+(.+?)\s*\(2519/i)?.[1] ||
+    text.match(/ወደ\s+(.+?)\s*\(2519/i)?.[1];
   
   if (recipientMatch) {
     // Clean up trailing punctuation/spaces

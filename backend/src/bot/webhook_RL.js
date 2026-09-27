@@ -13,6 +13,7 @@ function createBot() {
   bot.action('balance', commands.handleBalance);
   bot.action('copy_code', commands.handleCopyCode);
   bot.action('deposit', commands.handleDepositButton);
+  bot.action(/^deposit_method_(TELEBIRR|CBE)$/, (ctx) => commands.handleDepositMethod(ctx, ctx.match[1]));
   bot.action('withdraw', commands.handleWithdrawButton);
   bot.action('support', commands.handleSupport);
   bot.action('info', commands.handleInfo);

@@ -15,10 +15,10 @@ router.get('/balance', asyncHandler(async (req, res) => {
 }));
 
 router.post('/deposit', depositRateLimit, asyncHandler(async (req, res) => {
-  const { amount, proof } = req.body || {};
+  const { amount, proof, method } = req.body || {};
   if (!amount || !proof) return fail(res, 400, 'INVALID_AMOUNT', 'amount and proof are required');
 
-  const result = await walletService.submitDeposit(req.userId, Number(amount), String(proof));
+  const result = await walletService.submitDeposit(req.userId, Number(amount), String(proof), method);
   if (result.duplicate) {
     return fail(res, 409, 'RECEIPT_ALREADY_USED', 'This receipt has already been submitted.', {
       status: result.transaction.status

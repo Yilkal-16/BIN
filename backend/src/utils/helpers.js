@@ -45,6 +45,16 @@ function fail(res, status, code, message, details = undefined) {
   });
 }
 
+/**
+ * Whole-birr money rule: fractional Birr (anything below 1 Birr) carries no
+ * spendable value in this system, so every balance-affecting amount must be
+ * a positive integer. Used to validate user-supplied amounts (deposit,
+ * withdraw, admin credit) before they ever reach the ledger.
+ */
+function isWholeBirr(amount) {
+  return Number.isInteger(amount) && amount > 0;
+}
+
 /** Clamp pagination params to documented defaults/max (§8.4/§8.5). */
 function paginationParams(query, { defaultLimit = 20, maxLimit = 100 } = {}) {
   let limit = parseInt(query.limit, 10);
@@ -82,6 +92,7 @@ module.exports = {
   generateWithdrawalDisplayId,
   STAKES,
   DEFAULT_STAKE,
+  isWholeBirr,
   ok,
   fail,
   paginationParams,

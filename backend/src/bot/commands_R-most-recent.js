@@ -10,6 +10,14 @@ const kb = require('./keyboards');
 const WEBAPP_URL = process.env.WEBAPP_URL;
 const ADMIN_ID = process.env.ADMIN_ID;
 const DEPOSIT_PHONE = process.env.DEPOSIT_PHONE_NUMBER || '0911587568';
+// Two different CBE env vars, two different jobs:
+//  - CBE_RECIPIENT_ACCOUNT_MASKED: the masked form ("1********9222") exactly
+//    as it appears inside a CBE confirmation SMS — used only by
+//    cbeVerification.js to match incoming proof, never shown to anyone.
+//  - CBE_RECIPIENT_ACCOUNT: the real, full account number depositors are
+//    told to send money to.
+const CBE_ACCOUNT = process.env.CBE_RECIPIENT_ACCOUNT || '';
+const CBE_ACCOUNT_NAME = process.env.CBE_RECIPIENT_NAME || 'Mekuryaw Bele Tarik';
 const DEPOSIT_MIN = Number(process.env.DEPOSIT_MIN_AMOUNT || 50);
 const DEPOSIT_MAX = Number(process.env.DEPOSIT_MAX_AMOUNT || 50000);
 const WITHDRAW_MIN = Number(process.env.WITHDRAW_MIN_AMOUNT || 50);
@@ -200,24 +208,42 @@ async function handleDepositButton(ctx) {
     return ctx.reply('Deposits are for players only.');
   }
   await ack(ctx);
-  await setState(telegramId, 'AWAITING_DEPOSIT_AMOUNT');
+  await setState(telegramId, 'AWAITING_DEPOSIT_METHOD');
+  await ctx.reply('How would you like to pay?', kb.depositMethodKeyboard());
+}
+
+async function handleDepositMethod(ctx, method) {
+  const telegramId = String(ctx.from.id);
+  const user = await getUser(telegramId);
+  if (!user) return ctx.reply('Please register first.');
+  await ack(ctx);
+  await setState(telegramId, 'AWAITING_DEPOSIT_AMOUNT', { method });
   await ctx.reply(`Enter the amount you wish to deposit (min: ${DEPOSIT_MIN} Birr, max: ${DEPOSIT_MAX} Birr)`);
 }
 
 async function handleDepositAmount(ctx, text) {
   const telegramId = String(ctx.from.id);
+  const state = await getState(telegramId);
+  const method = (state.data && state.data.method) || 'TELEBIRR';
   const amount = Number(text.trim());
-  if (!Number.isFinite(amount) || amount < DEPOSIT_MIN || amount > DEPOSIT_MAX) {
-    return ctx.reply(`Please enter a valid amount between ${DEPOSIT_MIN} and ${DEPOSIT_MAX} Birr.`);
+  if (!Number.isInteger(amount) || amount < DEPOSIT_MIN || amount > DEPOSIT_MAX) {
+    return ctx.reply(`Please enter a whole number between ${DEPOSIT_MIN} and ${DEPOSIT_MAX} Birr (no fractions).`);
   }
-  await setState(telegramId, 'AWAITING_DEPOSIT_PROOF', { amount });
+  await setState(telegramId, 'AWAITING_DEPOSIT_PROOF', { amount, method });
+
+  if (method === 'CBE') {
+    await ctx.reply(
+      `💰 *[${amount} ብር]* ወደ CBE አካውንት 🏦: ${CBE_ACCOUNT}${CBE_ACCOUNT_NAME ? ` (${CBE_ACCOUNT_NAME})` : ''} ይላኩ።\n` +
+      `በመቀጠል ከ CBE የደረሰወትን ማረጋገጫ ቴክስት (SMS) እዚህ ላይ ያስገቡ።\n\n\n`,
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
   await ctx.reply(
      `💰 *[${amount} ብር]* በቴሌብር አካውንት 📱: ${DEPOSIT_PHONE} ይላኩ።\n` +
 
-     `በመቀጠል ከቴሌብር የደረሰወትን ማረጋገጫ ቴክስት (SMS) እዚህ ላይ ያስገቡ።\n\n\n` +  
-
-      `⚠️ Do not close this chat.\n` +
-      `⏳ *Verification timeout:* ${VERIFY_TIMEOUT_MS / 1000 / 60} minutes`,
+     `በመቀጠል ከቴሌብር የደረሰወትን ማረጋገጫ ቴክስት (SMS) እዚህ ላይ ያስገቡ።\n\n\n`,
     { parse_mode: 'Markdown' }
   );
 }
@@ -227,12 +253,13 @@ async function handleDepositProof(ctx, text) {
   const user = await getUser(telegramId);
   const state = await getState(telegramId);
   const amount = state.data.amount;
+  const method = state.data.method || 'TELEBIRR';
   const rawProof = text.trim();
 
   await clearState(telegramId);
   await ctx.reply('🔄 Verifying your payment, please wait...');
 
-  const result = await walletService.submitDeposit(user._id, amount, rawProof);
+  const result = await walletService.submitDeposit(user._id, amount, rawProof, method);
 
   if (result.duplicate) {
     return ctx.reply(
@@ -251,22 +278,23 @@ async function handleDepositProof(ctx, text) {
     );
   }
 
-  return ctx.reply(depositFailureMessage(result.reason), { parse_mode: 'Markdown' });
+  return ctx.reply(depositFailureMessage(result.reason, method), { parse_mode: 'Markdown' });
 }
 
-function depositFailureMessage(reason) {
+function depositFailureMessage(reason, method = 'TELEBIRR') {
+  const providerLabel = method === 'CBE' ? 'CBE' : 'Telebirr';
   const base = {
     UNPARSEABLE:
-      `❌ *We couldn't read that as a Telebirr confirmation.*\n` +
-      `Please paste the *entire* confirmation SMS you received from Telebirr.`,
+      `❌ *We couldn't read that as a ${providerLabel} confirmation.*\n` +
+      `Please paste the *entire* confirmation SMS you received from ${providerLabel}.`,
     AMOUNTMATCHES:
       `❌ *The amount in the SMS doesn't match what you entered.*\n` +
       `Please double check the amount, or wait for manual admin review.`,
     RECIPIENTNAMEMATCHES:
-      `❌ *This payment doesn't appear to have been sent to our Telebirr account.*\n` +
+      `❌ *This payment doesn't appear to have been sent to our ${providerLabel} account.*\n` +
       `An admin will review this manually.`,
     RECIPIENTPHONEMATCHES:
-      `❌ *This payment doesn't appear to have been sent to our Telebirr account.*\n` +
+      `❌ *This payment doesn't appear to have been sent to our ${providerLabel} account.*\n` +
       `An admin will review this manually.`,
     TRANSACTIONIDFORMATVALID:
       `❌ *That doesn't look like a valid Telebirr transaction number.*\n` +
@@ -276,7 +304,13 @@ function depositFailureMessage(reason) {
       `Each Telebirr confirmation can only be used once. An admin will review this manually.`,
     WITHINTIMEWINDOW:
       `⏳ *This confirmation is too old to auto-verify* (must be within 10 minutes of the transaction).\n` +
-      `An admin will review this manually.`
+      `An admin will review this manually.`,
+    RECEIPTSLUGFORMATVALID:
+      `❌ *That doesn't look like a valid CBE receipt link.*\n` +
+      `Please double check you pasted the correct confirmation message.`,
+    RECEIPTSLUGNOTUSED:
+      `❌ *This transaction has already been used for a previous deposit.*\n` +
+      `Each CBE confirmation can only be used once. An admin will review this manually.`
   };
   return (
     base[reason] ||
@@ -309,8 +343,8 @@ async function handleWithdrawAmount(ctx, text) {
   const amount = Number(text.trim());
   await clearState(telegramId);
 
-  if (!Number.isFinite(amount) || amount < WITHDRAW_MIN || amount > WITHDRAW_MAX) {
-    return ctx.reply(`Please enter a valid amount between ${WITHDRAW_MIN} and ${WITHDRAW_MAX} Birr.`);
+  if (!Number.isInteger(amount) || amount < WITHDRAW_MIN || amount > WITHDRAW_MAX) {
+    return ctx.reply(`Please enter a whole number between ${WITHDRAW_MIN} and ${WITHDRAW_MAX} Birr (no fractions).`);
   }
 
   try {
@@ -533,8 +567,9 @@ async function handleAdminDashboard(ctx) {
 }
 
 // "TRANSACTION" tab — daily/weekly/monthly/total summary of registered
-// users, games played per stake, finalized deposits, and approved
-// withdrawals (see reportingService for the exact bucketing rules).
+// users, games played per stake, finalized deposits, manual (admin)
+// credits, and approved withdrawals (see reportingService for the exact
+// bucketing rules).
 async function handleAdminTransactions(ctx) {
   const admin = await requireAdminSession(ctx);
   if (!admin) return;
@@ -554,6 +589,7 @@ async function handleAdminTransactions(ctx) {
     const gamesLine = STAKES.map((s) => `${s}: ${gamesByStake[s]}`).join(', ');
     const totalGames = STAKES.reduce((sum, s) => sum + gamesByStake[s], 0);
     const deposits = summary.deposits[key];
+    const manualCredits = summary.manualCredits[key];
     const withdrawals = summary.withdrawals[key];
 
     lines.push(
@@ -561,6 +597,7 @@ async function handleAdminTransactions(ctx) {
       `👤 Registered Users: ${summary.users[key]}`,
       `🎮 Games Played (${totalGames} total) — by stake: ${gamesLine}`,
       `💵 Deposits (finalized): ${deposits.count} — ${deposits.total} Birr`,
+      `🎁 Manual Credit: ${manualCredits.count} — ${manualCredits.total} Birr`,
       `💸 Withdrawals (approved): ${withdrawals.count} — ${withdrawals.total} Birr`
     );
   }
@@ -729,7 +766,7 @@ async function handleAdminCreditAmount(ctx, text) {
   const amount = Number(text.trim());
   await clearState(telegramId);
 
-  if (!Number.isFinite(amount) || amount <= 0) return ctx.reply('Invalid amount.');
+  if (!Number.isInteger(amount) || amount <= 0) return ctx.reply('Invalid amount — enter a whole number of Birr (no fractions).');
 
   try {
     const { newBalance } = await walletService.adminCredit(state.data.targetUserId, amount, admin._id, 'Manual admin credit');
@@ -801,6 +838,7 @@ module.exports = {
   handleBalance,
   handleCopyCode,
   handleDepositButton,
+  handleDepositMethod,
   handleWithdrawButton,
   handleSupport,
   handleInfo,

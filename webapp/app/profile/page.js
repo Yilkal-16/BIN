@@ -1,44 +1,9 @@
 'use client';
-import { useState } from 'react';
 import AuthGate from '../../components/AuthGate';
 import { useTelegramUser } from '../../components/TelegramProvider';
-import { api } from '../../lib/api';
 
 function ProfileContent() {
-  const { user, refreshProfile } = useTelegramUser();
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(user.displayName || '');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-
-  const startEditing = () => {
-    setName(user.displayName || '');
-    setError(null);
-    setEditing(true);
-  };
-
-  const cancelEditing = () => {
-    setEditing(false);
-    setError(null);
-  };
-
-  const save = async () => {
-    if (!name.trim()) {
-      setError('Name cannot be empty.');
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      await api.updateProfile({ displayName: name.trim() });
-      await refreshProfile();
-      setEditing(false);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  };
+  const { user } = useTelegramUser();
 
   return (
     <div className="px-5 pt-8">
@@ -47,28 +12,7 @@ function ProfileContent() {
           {(user.displayName || '?')[0]?.toUpperCase()}
         </div>
 
-        {editing ? (
-          <div className="flex flex-col items-center gap-2 w-full">
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              maxLength={64}
-              className="bg-surface2 border border-line rounded-chip px-3 py-1.5 text-ivory text-center outline-none focus:border-gold w-full max-w-[220px]"
-            />
-            {error && <p className="text-coral text-xs">{error}</p>}
-            <div className="flex gap-3 mt-1">
-              <button onClick={cancelEditing} disabled={busy} className="text-mute text-sm px-3 py-1">Cancel</button>
-              <button onClick={save} disabled={busy} className="text-gold text-sm font-medium px-3 py-1">
-                {busy ? 'Saving…' : 'Save'}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <>
-            <h1 className="font-display font-semibold text-xl text-ivory">{user.displayName}</h1>
-            <button onClick={startEditing} className="text-gold text-xs font-medium mt-1">Edit name</button>
-          </>
-        )}
+        <h1 className="font-display font-semibold text-xl text-ivory">{user.displayName}</h1>
         <p className="text-mute text-sm mt-2">{user.phone}</p>
       </div>
 

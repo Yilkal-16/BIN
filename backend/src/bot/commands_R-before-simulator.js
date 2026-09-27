@@ -1,8 +1,7 @@
-const { User, UserState, AdminRequest, Transaction, HouseWallet, Game, DrawSequence } = require('../models');
+const { User, UserState, AdminRequest, Transaction, HouseWallet, Game } = require('../models');
 const walletService = require('../services/walletService');
 const notificationService = require('../services/notificationService');
 const reportingService = require('../services/reportingService');
-const simulatorService = require('../services/simulatorService');
 const { redis, recordAdminPinAttempt, isAdminLockedOut } = require('../utils/redis');
 const { STAKES } = require('../utils/helpers');
 const logger = require('../utils/logger');
@@ -797,130 +796,6 @@ async function handleAdminWinnersPage(ctx, page) {
   await sendWinnersPage(ctx, Number(page));
 }
 
-// "SIMULATOR" tab — shows the precomputed top-3 cartelas for every
-// upcoming/current game. Predictions are generated and stored immediately
-// when draw sequences are created, so this view never generates a new draw.
-//
-// Telegram's legacy Markdown parser is deliberately NOT used here. Pattern
-// names such as "DIAGONAL_LINE" contain underscores and can cause Telegram
-// to reject the whole message with "can't parse entities". HTML with proper
-// escaping is used instead, so database values can never break Telegram's
-// entity parser.
-function escapeTelegramHtml(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\"/g, '&quot;');
-}
-
-async function sendSimulatorPage(ctx, page) {
-  // Current games first, followed by still-unclaimed future sequences.
-  const activeGames = await Game.find({
-    status: { $in: ['WAITING', 'ACTIVE', 'SETTLING'] },
-    drawSequenceId: { $ne: null }
-  }, { gameId: 1, stake: 1, status: 1, drawSequenceId: 1 }).lean();
-
-  const activeBySequence = new Map(
-    activeGames.map((game) => [String(game.drawSequenceId), game])
-  );
-
-  const activeSequenceIds = activeGames.map((game) => game.drawSequenceId);
-  const upcomingSequences = await DrawSequence.find({
-    $or: [
-      { used: false },
-      ...(activeSequenceIds.length ? [{ _id: { $in: activeSequenceIds } }] : [])
-    ]
-  })
-    .sort({ createdAt: 1, _id: 1 })
-    .lean();
-
-  const total = upcomingSequences.length;
-  const totalPages = Math.max(1, Math.ceil(total / ADMIN_PAGE_SIZE));
-  page = Math.min(Math.max(1, page), totalPages);
-
-  if (total === 0) {
-    await ctx.reply('<b>🎯 SIMULATOR</b>\nNo upcoming draw sequences are currently available.', { parse_mode: 'HTML' });
-    return;
-  }
-
-  const pageItems = upcomingSequences.slice(
-    (page - 1) * ADMIN_PAGE_SIZE,
-    page * ADMIN_PAGE_SIZE
-  );
-
-  const lines = [
-    '<b>🎯 SIMULATOR — PRECOMPUTED WINNERS</b>',
-    `Showing <b>${pageItems.length}</b> of <b>${total}</b> upcoming/current sequence(s).`,
-    'The list is generated from the stored 75-number draw order and the 200 cartela master set.',
-    ''
-  ];
-
-  pageItems.forEach((sequence, index) => {
-    const game = activeBySequence.get(String(sequence._id));
-    const position = (page - 1) * ADMIN_PAGE_SIZE + index + 1;
-    const status = game
-      ? `GAME ${game.gameId} · ${game.stake} Birr · ${game.status}`
-      : 'UPCOMING · not yet claimed';
-
-    lines.push(`<b>${position}. ${escapeTelegramHtml(status)}</b>`);
-    lines.push(`Sequence: <code>${escapeTelegramHtml(String(sequence._id).slice(-8))}</code>`);
-
-    const winners = (sequence.predictedWinners || []).slice(0, 3);
-    if (winners.length === 0) {
-      lines.push('⚠️ No top-3 prediction is stored for this sequence.');
-    } else {
-      winners.forEach((winner) => {
-        const patterns = Array.isArray(winner.patterns) && winner.patterns.length
-          ? winner.patterns.join(', ')
-          : 'UNKNOWN_PATTERN';
-        lines.push(
-          `${escapeTelegramHtml(winner.rank)}. Cartela <b>#${escapeTelegramHtml(winner.cartelaId)}</b>` +
-          ` — draw <b>#${escapeTelegramHtml(winner.drawIndex)}</b>` +
-          ` (${escapeTelegramHtml(winner.drawNumber)})` +
-          ` — <code>${escapeTelegramHtml(patterns)}</code>`
-        );
-      });
-    }
-
-    lines.push('');
-  });
-
-  lines.push(`Page <b>${page}/${totalPages}</b>`);
-
-  await ctx.reply(lines.join('\n'), {
-    parse_mode: 'HTML',
-    ...kb.paginationKeyboard('admin_simulator_page', page, totalPages)
-  });
-}
-
-async function handleAdminSimulator(ctx) {
-  const admin = await requireAdminSession(ctx);
-  if (!admin) return;
-  await ctx.answerCbQuery();
-  try {
-    // Backfill any old sequences that predate this feature before displaying.
-    await simulatorService.ensurePredictionsForExistingSequences();
-    await sendSimulatorPage(ctx, 1);
-  } catch (err) {
-    logger.error('Simulator admin view failed', { error: err.message, stack: err.stack });
-    await ctx.reply(`⚠️ Simulator unavailable: ${err.message}`);
-  }
-}
-
-async function handleAdminSimulatorPage(ctx, page) {
-  const admin = await requireAdminSession(ctx);
-  if (!admin) return;
-  await ctx.answerCbQuery();
-  try {
-    await simulatorService.ensurePredictionsForExistingSequences();
-    await sendSimulatorPage(ctx, Number(page));
-  } catch (err) {
-    logger.error('Simulator admin page failed', { error: err.message, stack: err.stack });
-    await ctx.reply(`⚠️ Simulator unavailable: ${err.message}`);
-  }
-}
-
 async function handleDepositDecision(ctx, action, id) {
   const admin = await requireAdminSession(ctx);
   if (!admin) return;
@@ -1097,8 +972,6 @@ module.exports = {
   handleAdminTransactions,
   handleAdminWinners,
   handleAdminWinnersPage,
-  handleAdminSimulator,
-  handleAdminSimulatorPage,
   handleDepositDecision,
   handleWithdrawDecision,
   handleAdminCreditButton,
