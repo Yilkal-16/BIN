@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import AuthGate from '../../../components/AuthGate';
 import { useWebSocket } from '../../../hooks/useWebSocket';
@@ -31,10 +31,6 @@ function letterFor(n) {
 
 const EMPTY_SET = new Set();
 
-// Persisted on the device so a player's Muted choice survives new rounds,
-// leaving the page, closing Telegram and coming back another day.
-const SOUND_MUTED_KEY = 'bingo:soundMuted';
-
 function LiveContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -45,34 +41,8 @@ function LiveContent() {
   const [myCartelas, setMyCartelas] = useState([]);
   const [cartelasLoaded, setCartelasLoaded] = useState(false);
   const [autoMode, setAutoMode] = useState(true);
-  const [soundMuted, setSoundMuted] = useState(false);
   const [manualMarks, setManualMarks] = useState({}); // cartelaId -> Set of manually-daubed numbers
   const [navigatedAway, setNavigatedAway] = useState(false);
-
-  // Transition countdown: shown in the "Recent" strip while the round is still
-  // WAITING (selection window open), so a player who has just bought cartelas
-  // can see when number-calling will start. Same source as the selection page:
-  // the server pushes `countdown_update` every second.
-  const [countdown, setCountdown] = useState(null);
-  const isWaiting = gameState.status === 'WAITING';
-
-  useEffect(() => {
-    if (!socket) return undefined;
-    const onCountdown = (payload) => {
-      if (payload?.gameId && gameId && payload.gameId !== gameId) return;
-      setCountdown(payload.remainingSeconds);
-    };
-    socket.on('countdown_update', onCountdown);
-    return () => socket.off('countdown_update', onCountdown);
-  }, [socket, gameId]);
-
-  // Local 1s tick as a resilience fallback (covers a dropped message or a
-  // brief reconnect); every incoming socket payload resyncs the value.
-  useEffect(() => {
-    if (countdown == null || !isWaiting) return undefined;
-    const t = setInterval(() => setCountdown((c) => (c == null ? c : Math.max(0, c - 1))), 1000);
-    return () => clearInterval(t);
-  }, [countdown != null, isWaiting]);
 
   useEffect(() => {
     if (!gameId) return;
@@ -104,112 +74,6 @@ function LiveContent() {
       router.replace(`/game/winner?gameId=${gameId}`);
     }
   }, [gameState.winners, gameState.status, gameId, router, navigatedAway]);
-
-  // Play the B-I-N-G-O voice call for each newly-called number. The first
-  // `lastCalled` seen after mount/join is just "whatever the state already
-  // is" (e.g. rejoining mid-round or a page refresh) — not a fresh call —
-  // so it's recorded silently rather than played, and only genuinely new
-  // values after that trigger a sound.
-  const lastPlayedNumberRef = useRef(null);
-  const hasSeenFirstCallRef = useRef(false);
-  // Read via refs rather than effect dependencies, so toggling mute or
-  // backgrounding the app never re-runs/replays the effect — it just changes
-  // what the *next* call does.
-  const soundMutedRef = useRef(false);
-  const isForegroundRef = useRef(true);
-  const activeAudiosRef = useRef(new Set()); // voice clips currently playing
-
-  const stopAllAudio = () => {
-    activeAudiosRef.current.forEach((a) => {
-      try {
-        a.pause();
-        a.currentTime = 0;
-      } catch {}
-    });
-    activeAudiosRef.current.clear();
-  };
-
-  // Load the saved mute preference once on mount (client only).
-  useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(SOUND_MUTED_KEY) === '1';
-      soundMutedRef.current = saved;
-      setSoundMuted(saved);
-    } catch {}
-  }, []);
-
-  const toggleSound = () => {
-    const next = !soundMuted;
-    soundMutedRef.current = next;
-    setSoundMuted(next);
-    if (next) stopAllAudio(); // muting cuts off any call still speaking
-    try {
-      window.localStorage.setItem(SOUND_MUTED_KEY, next ? '1' : '0');
-    } catch {}
-  };
-
-  // Only call numbers while the live page is actually in front of the player.
-  // Silence (and stop) audio when the tab/WebView is hidden, Telegram is
-  // minimized or another app is opened, and when leaving this page (cleanup
-  // runs on unmount, e.g. the Back button).
-  useEffect(() => {
-    const tg = typeof window !== 'undefined' ? window.Telegram?.WebApp : null;
-    let tgActive = true;
-    const apply = () => {
-      const foreground = tgActive && document.visibilityState === 'visible';
-      isForegroundRef.current = foreground;
-      if (!foreground) stopAllAudio();
-    };
-    const onActivated = () => {
-      tgActive = true;
-      apply();
-    };
-    const onDeactivated = () => {
-      tgActive = false;
-      apply();
-    };
-    apply();
-    document.addEventListener('visibilitychange', apply);
-    window.addEventListener('pagehide', stopAllAudio);
-    if (typeof tg?.onEvent === 'function') {
-      tg.onEvent('activated', onActivated);
-      tg.onEvent('deactivated', onDeactivated);
-    }
-    return () => {
-      document.removeEventListener('visibilitychange', apply);
-      window.removeEventListener('pagehide', stopAllAudio);
-      if (typeof tg?.offEvent === 'function') {
-        tg.offEvent('activated', onActivated);
-        tg.offEvent('deactivated', onDeactivated);
-      }
-      stopAllAudio();
-    };
-  }, []);
-
-  useEffect(() => {
-    const lc = gameState.lastCalled;
-    if (!lc) return;
-    if (!hasSeenFirstCallRef.current) {
-      hasSeenFirstCallRef.current = true;
-      lastPlayedNumberRef.current = lc.number;
-      return;
-    }
-    if (lastPlayedNumberRef.current === lc.number) return;
-    // Recorded before the checks below so a call skipped while muted or in
-    // the background is never replayed later.
-    lastPlayedNumberRef.current = lc.number;
-    if (soundMutedRef.current) return;
-    if (!isForegroundRef.current) return;
-    const file = `${lc.letter}${String(lc.number).padStart(2, '0')}.ogg`;
-    const audio = new Audio(`/audio/${file}`);
-    const release = () => activeAudiosRef.current.delete(audio);
-    activeAudiosRef.current.add(audio);
-    audio.addEventListener('ended', release);
-    audio.addEventListener('error', release);
-    // Autoplay can be blocked by the browser/WebView in some states — that's
-    // a silent no-op, never a thrown error the player would see.
-    audio.play().catch(release);
-  }, [gameState.lastCalled]);
 
   const markedSet = useMemo(() => new Set(gameState.calledNumbers), [gameState.calledNumbers]);
   const netPrizePool = gameState.grossPrizePool ? Math.floor(gameState.grossPrizePool * 0.85) : 0;
@@ -262,14 +126,7 @@ function LiveContent() {
             {/* Circular number calling display */}
             <CurrentBallDisplay lastCalled={gameState.lastCalled} />
 
-            {/* Transition countdown — takes the place of the Recent strip until
-                number-calling starts, then the Recent strip returns. */}
-            {isWaiting && countdown != null ? (
-              <div className="flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 bg-violet-500/10 border border-violet-400/30 rounded-chip py-2">
-                <span className="font-mono font-bold text-violet-300 text-xl leading-none tabular-nums">{countdown}s</span>
-              </div>
-            ) : (
-            /* Recent calls strip */
+            {/* Recent calls strip */}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-[9px] text-mute font-medium uppercase tracking-wide">Recent</span>
@@ -294,7 +151,6 @@ function LiveContent() {
                 )}
               </div>
             </div>
-            )}
           </div>
 
           {/* Cartelas - scrollable */}
@@ -340,15 +196,6 @@ function LiveContent() {
           }`}
         >
           Auto {autoMode ? 'ON' : 'OFF'}
-        </button>
-        <button
-          onClick={toggleSound}
-          aria-label={soundMuted ? 'Unmute number calls' : 'Mute number calls'}
-          className={`flex-1 py-3 rounded-lg text-sm font-bold border active:scale-[0.98] transition-transform ${
-            soundMuted ? 'bg-[#2E3440] text-mute border-[#3A4050]' : 'bg-[#0E5952]/20 text-[#4FD1B8] border-[#0E5952]/50'
-          }`}
-        >
-          {soundMuted ? '🔇 Muted' : '🔊 Sound'}
         </button>
       </div>
     </div>

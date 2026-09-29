@@ -76,7 +76,7 @@ function LiveContent() {
   }, [gameState.winners, gameState.status, gameId, router, navigatedAway]);
 
   const markedSet = useMemo(() => new Set(gameState.calledNumbers), [gameState.calledNumbers]);
-  const netPrizePool = gameState.grossPrizePool ? Math.floor(gameState.grossPrizePool * 0.85) : 0;
+  const netPrizePool = gameState.grossPrizePool ? Math.floor(gameState.grossPrizePool * 0.8) : 0;
   const isSpectator = cartelasLoaded && myCartelas.length === 0;
 
   // Manual mode: the player taps their own cells to daub them. Server-side
@@ -303,9 +303,18 @@ function NoCartelasBoughtPlaceholder() {
         🎰
       </div>
       <p className="text-amber-300 font-extrabold text-sm mb-2 tracking-wide">
-        ይሄ ዙር ጠርቶ እስኪጨርስ ጠብቁ፤ ክዛ ራሱ ቀጣይ ዙር ይጀምራል።
+        የቢንጎ ማጫወቻ አፕሊኬሽን መግዛት ከፈለጋችሁ፤
       </p>
-      </div>
+      <p className="text-ivory text-xs leading-relaxed max-w-[220px]">
+        በዚህ ቁጥር ደውሉ፤ በተመጣጣኝ ዋጋና በፍጥነት ሰርተን እናስረክባለን።
+      </p>
+      <a
+        href="tel:0956404141"
+        className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-amber-400 text-[#111] font-extrabold text-sm shadow-lg shadow-amber-400/20 active:scale-95 transition-transform"
+      >
+        📞 0956404141
+      </a>
+    </div>
   );
 }
 
