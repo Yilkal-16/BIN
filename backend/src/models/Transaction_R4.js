@@ -28,7 +28,6 @@ const transactionSchema = new Schema({
       'HOUSE_COMMISSION', // 20% house cut
       'HOUSE_FRACTIONAL', // Fractional ETB remainder
       'HOUSE_WINNING', // Admin cartela wins
-      'ADMIN_AUTO_PURCHASE', // House auto-allocated cartelas (minimum-cartelas top-up)
       'ROLLOVER' // No-winner round rolls prize pool to next game
     ],
     required: true
