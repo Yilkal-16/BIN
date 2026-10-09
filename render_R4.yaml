@@ -54,10 +54,6 @@ services:
         value: "1200"
       - key: HOUSE_COMMISSION
         value: "0.2"
-      - key: AMOUNT_ADMIN_CARTELAS
-        value: "10"
-      - key: ADMIN_WIN_INTERVAL
-        value: "4"
       - key: MAX_CARTELAS_PER_USER
         value: "2"
       - key: STAKE_AMOUNT

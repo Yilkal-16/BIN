@@ -48,7 +48,6 @@ function SelectionContent() {
   // though it had already gone through. A ref is checked/set synchronously,
   // before any re-render, so it closes that race completely.
   const purchaseInProgressRef = useRef(false);
-  const statusRef = useRef(null); // last known round status, to tell a NEW round from a refresh of the current one
 
   const loadAvailability = useCallback(async (gid) => {
     const { cartelas } = await api.getAvailableCartelas(gid);
@@ -66,7 +65,6 @@ function SelectionContent() {
         const { gameState } = await api.getLobby(stake);
         setGameId(gameState.gameId);
         setStatus(gameState.status);
-        statusRef.current = gameState.status;
         if (gameState.status === 'WAITING') {
           await loadAvailability(gameState.gameId);
         }
@@ -106,17 +104,11 @@ function SelectionContent() {
 
     const onState = (payload) => {
       if (payload.gameId !== gameId) return;
-      const wasWaiting = statusRef.current === 'WAITING';
-      statusRef.current = payload.status;
       setStatus(payload.status);
       if (payload.status === 'WAITING') {
-        // Only a genuinely NEW round resets the player's picks. The server also
-        // sends WAITING updates during the same round (e.g. after every house
-        // auto-allocation batch); those must not clear what the player selected.
-        if (!wasWaiting) {
-          purchasedRef.current = false;
-          setSelected([]);
-        }
+        // New round started — reset and show the board again.
+        purchasedRef.current = false;
+        setSelected([]);
         loadAvailability(gameId).catch(() => {});
       }
     };

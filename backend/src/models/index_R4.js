@@ -8,6 +8,5 @@ module.exports = {
   UserState: require('./UserState'),
   DrawSequence: require('./DrawSequence'),
   HouseWallet: require('./HouseWallet'),
-  HouseSettings: require('./HouseSettings'),
   ...require('./Counter')
 };

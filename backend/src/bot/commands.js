@@ -3,8 +3,9 @@ const walletService = require('../services/walletService');
 const notificationService = require('../services/notificationService');
 const reportingService = require('../services/reportingService');
 const simulatorService = require('../services/simulatorService');
+const houseAllocationService = require('../services/houseAllocationService');
 const { redis, recordAdminPinAttempt, isAdminLockedOut } = require('../utils/redis');
-const { STAKES } = require('../utils/helpers');
+const { STAKES, WELCOME_BONUS_NOTICE } = require('../utils/helpers');
 const logger = require('../utils/logger');
 const kb = require('./keyboards');
 const cbeVerification = require('../services/cbeVerification');
@@ -101,6 +102,35 @@ async function handleRegisterButton(ctx) {
   );
 }
 
+/**
+ * Links a phone-only imported account ('pending:<phone>' placeholder
+ * telegramId) to the Telegram user who just shared that phone. Returns the
+ * updated user, or null when no imported account matches. Also delivers the
+ * welcome-bonus notice that could not be sent at import time.
+ */
+async function claimImportedAccount(ctx, telegramId, phoneRaw) {
+  const digits = String(phoneRaw || '').replace(/\D/g, '');
+  if (!digits) return null;
+
+  const pending = await User.findOne({ phone: { $in: [digits, `+${digits}`] }, telegramId: /^pending:/ });
+  if (!pending) return null;
+
+  const placeholderId = pending.telegramId;
+  pending.telegramId = telegramId;
+  pending.telegramUsername = ctx.from.username;
+  pending.displayName = ctx.from.first_name || ctx.from.username || 'Player';
+  pending.lastActive = new Date();
+  await pending.save();
+
+  const placeholderState = await UserState.findOneAndDelete({ userId: placeholderId });
+  await clearState(telegramId);
+
+  if (placeholderState?.data?.welcomeBonusNoticePending) {
+    await notificationService.notifyTelegram(telegramId, WELCOME_BONUS_NOTICE);
+  }
+  return pending;
+}
+
 async function handleContact(ctx) {
   const telegramId = String(ctx.from.id);
   const contact = ctx.message.contact;
@@ -114,6 +144,17 @@ async function handleContact(ctx) {
   let user = await getUser(telegramId);
   if (user) {
     return ctx.reply('You are already registered!', kb.removeKeyboard());
+  }
+
+  // Accounts bulk-imported from a phone list (scripts/importNewusers.js) have
+  // no Telegram ID yet. If this phone matches one, the person claims that
+  // account (balance and bonus already in place) instead of creating a
+  // second one — which the unique phone index would reject anyway.
+  user = await claimImportedAccount(ctx, telegramId, contact.phone_number);
+  if (user) {
+    await ctx.reply('✅ *Registration Successful!*', { parse_mode: 'Markdown', ...kb.removeKeyboard() });
+    await ctx.reply(`Welcome, ${user.displayName}! What would you like to do?`, { ...kb.mainMenu(user) });
+    return ctx.reply('👇 Quick menu', kb.persistentMenu(user));
   }
 
   user = await User.create({
@@ -987,6 +1028,103 @@ async function handleWithdrawDecision(ctx, action, id) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Admin: house AUTO-ALLOCATION (ON/OFF switch + AMOUNT_ADMIN_CARTELAS)
+// ---------------------------------------------------------------------------
+
+async function buildAutoAllocationPanel() {
+  const settings = await houseAllocationService.getAutoAllocationSettings();
+  const limit = houseAllocationService.EMPTY_ROUNDS_TO_PAUSE;
+  const perStake = await Promise.all(
+    STAKES.map(async (stake) => {
+      const empty = await houseAllocationService.getEmptyStreak(stake);
+      const state = !settings.enabled ? '' : empty >= limit ? ' — ⏸ paused' : ' — active';
+      return `${stake} Birr: <b>${empty}</b> empty round(s) in a row${state}`;
+    })
+  );
+  const text = [
+    '<b>🏠 AUTO-ALLOCATION</b>',
+    `Status: <b>${settings.enabled ? 'ON ✅' : 'OFF ⛔'}</b>`,
+    `Cartelas per game (AMOUNT_ADMIN_CARTELAS): <b>${settings.amount}</b>`,
+    `ADMIN-WIN-INTERVAL: <b>${settings.adminWinInterval > 0 ? `every ${settings.adminWinInterval} game(s)` : 'OFF'}</b>`,
+    '',
+    perStake.join('\n')
+  ].join('\n');
+  return { text, keyboard: kb.autoAllocationKeyboard(settings.enabled) };
+}
+
+async function handleAdminAutoAlloc(ctx) {
+  const admin = await requireAdminSession(ctx);
+  if (!admin) return;
+  await ack(ctx);
+  const { text, keyboard } = await buildAutoAllocationPanel();
+  await ctx.reply(text, { parse_mode: 'HTML', ...keyboard });
+}
+
+async function handleAdminAutoAllocToggle(ctx) {
+  const admin = await requireAdminSession(ctx);
+  if (!admin) return;
+  const current = await houseAllocationService.getAutoAllocationSettings();
+  const updated = await houseAllocationService.setAutoAllocationEnabled(!current.enabled, ctx.from.id);
+  await ctx.answerCbQuery(`Auto-allocation is now ${updated.enabled ? 'ON' : 'OFF'}`);
+  const { text, keyboard } = await buildAutoAllocationPanel();
+  try {
+    await ctx.editMessageText(text, { parse_mode: 'HTML', ...keyboard });
+  } catch (_) {
+    await ctx.reply(text, { parse_mode: 'HTML', ...keyboard }); // message too old to edit
+  }
+}
+
+async function handleAdminAutoAllocAmountButton(ctx) {
+  const admin = await requireAdminSession(ctx);
+  if (!admin) return;
+  await ack(ctx);
+  await setState(String(ctx.from.id), 'AWAITING_ADMIN_AUTOALLOC_AMOUNT');
+  await ctx.reply(`Enter how many cartelas the house should auto-allocate per game (whole number, 0–${houseAllocationService.MAX_AMOUNT_ADMIN_CARTELAS}):`);
+}
+
+async function handleAdminAutoAllocPredictedButton(ctx) {
+  const admin = await requireAdminSession(ctx);
+  if (!admin) return;
+  await ack(ctx);
+  await setState(String(ctx.from.id), 'AWAITING_ADMIN_PREDICTED_EVERY');
+  await ctx.reply(`Enter ADMIN-WIN-INTERVAL: the house buys the predicted rank-1 winner cartela every N games (whole number, 0–${houseAllocationService.MAX_ADMIN_WIN_INTERVAL}; 0 = off):`);
+}
+
+async function handleAdminAutoAllocPredicted(ctx, text) {
+  const telegramId = String(ctx.from.id);
+  const admin = await getUser(telegramId);
+  if (!admin || !admin.isAdmin) {
+    await clearState(telegramId);
+    return ctx.reply('Admins only.');
+  }
+  try {
+    await houseAllocationService.setAdminWinInterval(text.trim(), telegramId);
+  } catch (err) {
+    return ctx.reply(`⚠️ ${err.message} Try again, or tap a menu button to cancel.`); // state kept so they can retry
+  }
+  await clearState(telegramId);
+  const panel = await buildAutoAllocationPanel();
+  await ctx.reply(`✅ Saved.\n\n${panel.text}`, { parse_mode: 'HTML', ...panel.keyboard });
+}
+
+async function handleAdminAutoAllocAmount(ctx, text) {
+  const telegramId = String(ctx.from.id);
+  const admin = await getUser(telegramId);
+  if (!admin || !admin.isAdmin) {
+    await clearState(telegramId);
+    return ctx.reply('Admins only.');
+  }
+  try {
+    await houseAllocationService.setAmountAdminCartelas(text.trim(), telegramId);
+  } catch (err) {
+    return ctx.reply(`⚠️ ${err.message} Try again, or tap a menu button to cancel.`); // state kept so they can retry
+  }
+  await clearState(telegramId);
+  const panel = await buildAutoAllocationPanel();
+  await ctx.reply(`✅ Amount saved.\n\n${panel.text}`, { parse_mode: 'HTML', ...panel.keyboard });
+}
+
 async function handleAdminCreditButton(ctx) {
   const admin = await requireAdminSession(ctx);
   if (!admin) return;
@@ -1069,6 +1207,10 @@ async function routeTextMessage(ctx) {
       return handleAdminCreditTarget(ctx, text);
     case 'AWAITING_ADMIN_CREDIT_AMOUNT':
       return handleAdminCreditAmount(ctx, text);
+    case 'AWAITING_ADMIN_AUTOALLOC_AMOUNT':
+      return handleAdminAutoAllocAmount(ctx, text);
+    case 'AWAITING_ADMIN_PREDICTED_EVERY':
+      return handleAdminAutoAllocPredicted(ctx, text);
     default:
       return;
   }
@@ -1099,6 +1241,10 @@ module.exports = {
   handleAdminWinnersPage,
   handleAdminSimulator,
   handleAdminSimulatorPage,
+  handleAdminAutoAlloc,
+  handleAdminAutoAllocToggle,
+  handleAdminAutoAllocAmountButton,
+  handleAdminAutoAllocPredictedButton,
   handleDepositDecision,
   handleWithdrawDecision,
   handleAdminCreditButton,

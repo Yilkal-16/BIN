@@ -31,9 +31,6 @@ const gameSchema = new Schema({
   winners: { type: [winnerSchema], default: [] },
   noWinner: { type: Boolean, default: false }, // all 75 drawn, nobody won (§12)
   rolloverFromGameId: { type: String, default: null },
-  // Set (atomically, inside the allocation transaction) the moment the house's
-  // auto-allocation runs for this game, so it can never run twice for one game.
-  houseTopUpAt: { type: Date, default: null },
   // Optimistic-locking guard for state transitions (§10.4).
   version: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now },

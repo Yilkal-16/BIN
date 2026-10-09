@@ -5,7 +5,6 @@ const scheduler = require('./scheduler');
 const winnerDetection = require('./winnerDetection');
 const cartelaService = require('../services/cartelaService');
 const walletService = require('../services/walletService');
-const houseAllocationService = require('../services/houseAllocationService');
 const notificationService = require('../services/notificationService');
 const engineLock = require('./engineLock');
 const { HOUSE_TELEGRAM_ID } = require('../utils/bootstrap');
@@ -48,7 +47,7 @@ async function broadcastGameState(game, extra = {}) {
     gameId: game.gameId,
     status: game.status,
     stake: game.stake,
-    playersCount: total, // real + house-allocated
+    playersCount: real,
     totalCartelas: total,
     adminCartelas: admin,
     currentDrawIndex: game.currentDrawIndex,
@@ -56,36 +55,6 @@ async function broadcastGameState(game, extra = {}) {
     grossPrizePool: game.grossPrizePool ?? 0,
     ...extra
   });
-}
-
-/**
- * Called right after each house purchase batch: tells every open selection
- * screen the exact IDs (greyed out instantly, no HTTP round trip) and pushes
- * the refreshed players / prize-pool numbers.
- */
-async function announceHouseBatch(game, cartelaIds) {
-  notificationService.emitToGame(game.gameId, 'cartela_update', {
-    gameId: game.gameId,
-    cartelaIds,
-    status: 'sold',
-    ownerId: 'system-admin'
-  });
-  const fresh = await Game.findOne({ gameId: game.gameId });
-  if (fresh) await broadcastGameState(fresh);
-}
-
-/** Once the house is done: a single safety-net signal to re-fetch availability in case a client missed a batch. */
-async function announceHouseComplete(game, cartelaIds) {
-  notificationService.emitToGame(game.gameId, 'cartela_update', {
-    gameId: game.gameId,
-    cartelaIds,
-    status: 'bulk-allocated'
-  });
-}
-
-/** House auto-allocated cartelas in a game (excludes the globally reserved ones, which are always pre-owned). */
-async function countHouseAllocated(gameId) {
-  return GameCartela.countDocuments({ gameId, ownerId: 'system-admin', isReserved: { $ne: true } });
 }
 
 /**
@@ -102,58 +71,22 @@ async function runWaitingPhase(game) {
 
     const totalTicks = Math.ceil(SELECTION_TIME / TICK_INTERVAL);
     let realSoldEverThisWindow = false;
-    let anySoldThisWindow = false; // real OR house auto-allocated — decides whether the game runs
 
-    // House auto-allocation runs alongside the countdown: several small,
-    // naturally-spaced purchases starting in the first few seconds and spread
-    // over the first 10-20 s. Does nothing unless an admin switched it ON; while
-    // ON it pauses only after 3 rounds in a row of this stake ended with 0 real
-    // purchases, and while paused it allocates as soon as a real player buys in
-    // the round — always before the round goes ACTIVE (see
-    // houseAllocationService.runNaturalAllocation).
-    const houseCtl = { cancelled: false };
-    const housePromise = houseAllocationService.runNaturalAllocation(game, {
-      ctl: houseCtl,
-      startedAt: Date.now(),
-      selectionMs: SELECTION_TIME * 1000,
-      onBatch: (ids) => announceHouseBatch(game, ids),
-      onComplete: (ids) => announceHouseComplete(game, ids)
-    });
+    for (let tick = 0; tick < totalTicks; tick++) {
+      if (stopRequested) return { aborted: true };
+      await sleep(TICK_INTERVAL * 1000);
 
-    try {
-      for (let tick = 0; tick < totalTicks; tick++) {
-        if (stopRequested) return { aborted: true };
-        await sleep(TICK_INTERVAL * 1000);
+      const elapsed = (tick + 1) * TICK_INTERVAL;
+      const remaining = Math.max(0, SELECTION_TIME - elapsed);
+      notificationService.emitToGame(game.gameId, 'countdown_update', { remainingSeconds: remaining });
 
-        const elapsed = (tick + 1) * TICK_INTERVAL;
-        const remaining = Math.max(0, SELECTION_TIME - elapsed);
-        notificationService.emitToGame(game.gameId, 'countdown_update', { remainingSeconds: remaining });
-
-        const { real } = await cartelaService.countSold(game.gameId);
-        if (real >= 1) realSoldEverThisWindow = true;
-        if (real >= 1 || (await countHouseAllocated(game.gameId)) >= 1) anySoldThisWindow = true;
-      }
-    } finally {
-      // Stop the house at the end of the round and never leave the window (and
-      // start ACTIVE) with a purchase mid-flight.
-      houseCtl.cancelled = true;
-      await housePromise;
-    }
-
-    // A purchase that landed after the last 5 s check still counts.
-    if (!realSoldEverThisWindow || !anySoldThisWindow) {
       const { real } = await cartelaService.countSold(game.gameId);
       if (real >= 1) realSoldEverThisWindow = true;
-      if (real >= 1 || (await countHouseAllocated(game.gameId)) >= 1) anySoldThisWindow = true;
     }
 
-    // Feeds the house's "3 consecutive rounds with 0 real purchases" pause check.
-    await houseAllocationService.recordWindowOutcome(game.stake, realSoldEverThisWindow);
+    if (realSoldEverThisWindow) return { aborted: false };
 
-    // The game runs if any cartela was sold — real or house auto-allocated.
-    if (anySoldThisWindow) return { aborted: false };
-
-    logger.info('0 cartelas sold (real or auto-allocated) — restarting WAITING countdown', { gameId: game.gameId });
+    logger.info('0 real cartelas sold — restarting WAITING countdown', { gameId: game.gameId });
     notificationService.emitToGame(game.gameId, 'game_cycle_update', { newState: 'WAITING', nextState: 'WAITING' });
   }
 }
@@ -348,13 +281,6 @@ async function settleGame(gameId, winners, noWinner) {
         if (winner.ownerId !== 'system-admin') {
           const winnerUser = await User.findById(winner.ownerId).session(session);
           winnerDisplayName = winnerUser?.displayName || null;
-        } else {
-          // House (auto-allocated) cartela: show a randomly picked name from
-          // the data/house_names list instead of a generic label, never the
-          // same name twice within one game.
-          winnerDisplayName = houseAllocationService.nextHouseName({
-            exclude: winnerRecords.filter((r) => r.ownerId === 'system-admin').map((r) => r.displayName)
-          });
         }
 
         winnerRecords.push({
@@ -396,7 +322,7 @@ async function notifyWinners(game) {
       cartelaId: w.cartelaId,
       prize: w.prizeAmount,
       pattern: w.pattern,
-      displayName: w.ownerId === 'system-admin' ? w.displayName || null : userById.get(String(w.ownerId))?.displayName || null
+      displayName: w.ownerId === 'system-admin' ? null : userById.get(String(w.ownerId))?.displayName || null
     })),
     prize: game.winners[0]?.prizeAmount || 0,
     cartelas: game.winners.map((w) => w.cartelaId)

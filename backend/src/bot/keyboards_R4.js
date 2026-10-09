@@ -77,19 +77,7 @@ function adminPanelKeyboard() {
     [Markup.button.callback('Dashboard Stats', 'admin_dashboard')],
     [Markup.button.callback('📊 TRANSACTION', 'admin_transactions')],
     [Markup.button.callback('🏆 WINNERS', 'admin_winners')],
-    [Markup.button.callback('🎯 SIMULATOR', 'admin_simulator')],
-    [Markup.button.callback('🏠 AUTO-ALLOCATION', 'admin_autoalloc')]
-  ]);
-}
-
-function autoAllocationKeyboard(enabled) {
-  return Markup.inlineKeyboard([
-    [Markup.button.callback(enabled ? '⛔ Turn OFF' : '✅ Turn ON', 'admin_autoalloc_toggle')],
-    [
-      Markup.button.callback('✏️ Set amount', 'admin_autoalloc_amount'),
-      Markup.button.callback('🎯 Set ADMIN-WIN-INTERVAL', 'admin_autoalloc_predicted')
-    ],
-    [Markup.button.callback('🔄 Refresh', 'admin_autoalloc')]
+    [Markup.button.callback('🎯 SIMULATOR', 'admin_simulator')]
   ]);
 }
 
@@ -154,7 +142,6 @@ module.exports = {
   depositMethodKeyboard,
   walletKeyboard,
   adminPanelKeyboard,
-  autoAllocationKeyboard,
   paginationKeyboard,
   approveDeclineKeyboard,
   depositActionKeyboard
