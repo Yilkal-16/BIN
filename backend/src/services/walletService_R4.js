@@ -35,7 +35,6 @@ const REVERSAL_PENALTY_RATE = 0.4;
  *
  *   GAME_PURCHASE (real player)         user -amount   house: no change (enters this game's escrow)
  *   WINNING       (real player wins)    user +amount   house: no change (paid out of that escrow)
- *   ADMIN_AUTO_PURCHASE (house top-up)  —              house -= amount  (house stakes its own money into this game's escrow)
  *   HOUSE_COMMISSION                    —              house += amount  (real earning, taken from the escrow)
  *   HOUSE_FRACTIONAL                    —              house += amount  (real earning, rounding leftover)
  *   HOUSE_WINNING (admin cartela wins)  —              house += amount  (that escrow share becomes house money)
@@ -49,7 +48,7 @@ const REVERSAL_PENALTY_RATE = 0.4;
  * §7.2 "authoritative source for all balance changes") is unaffected.
  * ============================================================================
  */
-const HOUSE_MUTATING_TYPES = new Set(['ADMIN_AUTO_PURCHASE', 'HOUSE_COMMISSION', 'HOUSE_FRACTIONAL', 'HOUSE_WINNING', 'ADMIN_CREDIT']);
+const HOUSE_MUTATING_TYPES = new Set(['HOUSE_COMMISSION', 'HOUSE_FRACTIONAL', 'HOUSE_WINNING', 'ADMIN_CREDIT']);
 
 /**
  * `session` is optional — pass a Mongo session when this reference ID is

@@ -20,7 +20,7 @@ async function currentGameState(stake) {
     gameId: game.gameId,
     status: game.status,
     stake: game.stake,
-    playersCount: total, // real + house-allocated
+    playersCount: real,
     totalCartelas: total,
     adminCartelas: admin,
     currentDrawIndex: game.currentDrawIndex,
@@ -61,7 +61,7 @@ router.get('/state', asyncHandler(async (req, res) => {
       gameId: game.gameId,
       status: game.status,
       stake: game.stake,
-      playersCount: total, // real + house-allocated
+      playersCount: real,
       totalCartelas: total,
       adminCartelas: admin,
       currentDrawIndex: game.currentDrawIndex,

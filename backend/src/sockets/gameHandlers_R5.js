@@ -10,7 +10,7 @@ async function sendFullState(socket, gameId) {
     gameId: game.gameId,
     status: game.status,
     stake: game.stake,
-    playersCount: total, // real + house-allocated
+    playersCount: real,
     totalCartelas: total,
     adminCartelas: admin,
     currentDrawIndex: game.currentDrawIndex,
