@@ -99,7 +99,7 @@ function WinnerContent() {
 }
 
 function winnerHeadline(winner, user) {
-  if (!winner.ownerId || winner.ownerId === 'system-admin') return winner.displayName ? `${winner.displayName} Won` : 'CARTELA WON!';
+  if (!winner.ownerId || winner.ownerId === 'system-admin') return 'CARTELA WON!';
   if (user.id && winner.ownerId.toString() === user.id.toString()) return 'You Won';
   return `${winner.displayName || 'Player'} Won`;
 }
